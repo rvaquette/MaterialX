@@ -864,7 +864,7 @@ export class Material
         {
             if (matassign.getShader())
             {
-                if (soloMaterial.length)
+                if (soloMaterial!="")
                 {
                     if (matassign.getMaterial().getNamePath() == soloMaterial)
                     {

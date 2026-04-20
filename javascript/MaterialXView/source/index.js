@@ -5,10 +5,12 @@
 
 import * as THREE from 'three';
 import { Viewer } from './viewer.js'
+import { MtlxGraphView } from './mtlxGraphView.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { dropHandler, dragOverHandler, setLoadingCallback, setSceneLoadingCallback } from './dropHandling.js';
 
 let renderer, orbitControls;
+let graphView = null;
 
 // FPS overlay state
 let fpsOverlay = null;
@@ -68,16 +70,33 @@ function captureFrame()
 function init()
 {
     let canvas = document.getElementById('webglcanvas');
+    let graphPanel = document.getElementById('graph-panel');
+    graphView = new MtlxGraphView('graphcanvas');
 
     // Handle material selection changes
     let materialsSelect = document.getElementById('materials');
     materialsSelect.value = materialFilename;
-    materialsSelect.addEventListener('change', (e) =>
+    materialsSelect.addEventListener('change', async (e) =>
     {
         materialFilename = e.target.value;
         viewer.getEditor().initialize();
-        viewer.getMaterial().loadMaterials(viewer, materialFilename);
+        await viewer.getMaterial().loadMaterials(viewer, materialFilename);
         viewer.getEditor().updateProperties(0.9);
+        await refreshNodeGraph();
+    });
+
+    // Toggle between renderer and MaterialX node graph view.
+    const viewModeSelect = document.getElementById('viewmode');
+    viewModeSelect.addEventListener('change', async (e) =>
+    {
+        const graphEnabled = e.target.value === 'graph';
+        canvas.style.visibility = graphEnabled ? 'hidden' : 'visible';
+        graphPanel.style.display = graphEnabled ? 'block' : 'none';
+        graphView.setVisible(graphEnabled);
+        if (graphEnabled)
+        {
+            await refreshNodeGraph();
+        }
     });
 
     // Handle geometry selection changes
@@ -142,7 +161,9 @@ function init()
         scene.loadGeometry(viewer, orbitControls);
 
         // Load materials
-        viewer.getMaterial().loadMaterials(viewer, materialFilename);
+        await viewer.getMaterial().loadMaterials(viewer, materialFilename);
+
+        await refreshNodeGraph();
 
         // Update assignments
         viewer.getMaterial().updateMaterialAssignments(viewer);
@@ -161,12 +182,13 @@ function init()
     document.addEventListener('drop', dropHandler, false);
     document.addEventListener('dragover', dragOverHandler, false);
 
-    setLoadingCallback(file =>
+    setLoadingCallback(async file =>
     {
         materialFilename = file.fullPath || file.name;
         viewer.getEditor().initialize();
-        viewer.getMaterial().loadMaterials(viewer, materialFilename);
+        await viewer.getMaterial().loadMaterials(viewer, materialFilename);
         viewer.getEditor().updateProperties(0.9);
+        await refreshNodeGraph();
     });
 
     setSceneLoadingCallback(file =>
@@ -179,12 +201,33 @@ function init()
 
     // enable three.js Cache so that dropped files can reference each other
     THREE.Cache.enabled = true;
+
+    async function refreshNodeGraph()
+    {
+        if (!graphView)
+        {
+            return;
+        }
+
+        try
+        {
+            await graphView.loadFromFile(viewer.getFileLoader(), materialFilename);
+        }
+        catch (err)
+        {
+            console.error('Unable to build MaterialX graph view:', err);
+        }
+    }
 }
 
 function onWindowResize()
 {
     viewer.getScene().updateCamera();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    if (graphView)
+    {
+        graphView.resize();
+    }
 }
 
 function animate()

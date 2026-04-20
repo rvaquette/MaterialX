@@ -12,6 +12,7 @@
   "dependencies": {
     "fflate": "^0.8.2",
     "lil-gui": "^0.19.2",
+    "litegraph.js": "^0.7.18",
     "three": "^0.183.2"
   },
   "devDependencies": {

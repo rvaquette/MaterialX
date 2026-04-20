@@ -14,6 +14,7 @@
 
 #include <nanogui/messagedialog.h>
 #include <nanogui/opengl.h>
+#include <MaterialXRenderGlsl/External/Glad/glad.h>
 
 namespace
 {
