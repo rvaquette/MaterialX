@@ -72,6 +72,7 @@ function init()
     let canvas = document.getElementById('webglcanvas');
     let graphPanel = document.getElementById('graph-panel');
     graphView = new MtlxGraphView('graphcanvas');
+    graphView.setEditor(viewer.getEditor());
 
     // Handle material selection changes
     let materialsSelect = document.getElementById('materials');

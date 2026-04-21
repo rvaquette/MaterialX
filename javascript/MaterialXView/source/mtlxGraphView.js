@@ -25,10 +25,18 @@ export class MtlxGraphView
     constructor(graphCanvasId)
     {
         this._graphCanvasId = graphCanvasId;
+        this._editor = null;
         this._graph = new LiteGraph.LGraph();
         this._canvas = new LiteGraph.LGraphCanvas(`#${graphCanvasId}`, this._graph);
         this._canvas.background_image = null;
         this._canvas.ds.scale = 0.85;
+
+        this._canvas.onNodeSelected = (node) => this._onNodeSelected(node);
+    }
+
+    setEditor(editor)
+    {
+        this._editor = editor;
     }
 
     setVisible(visible)
@@ -125,6 +133,7 @@ export class MtlxGraphView
 
             const graphNode = LiteGraph.createNode('basic/watch');
             graphNode.title = `${element.tagName}:${name}`;
+            graphNode._mtlxElement = element;
             graphNode.size = [220, 80];
 
             const inputs = Array.from(element.children).filter(child => child.tagName === 'input');
@@ -326,6 +335,158 @@ export class MtlxGraphView
             current = current.parentElement;
         }
         return 'root';
+    }
+
+    _onNodeSelected(node)
+    {
+        if (!this._editor) return;
+
+        this._editor.initialize();
+        const gui = this._editor.getGUI();
+
+        const element = node._mtlxElement;
+        if (!element)
+        {
+            gui.open();
+            return;
+        }
+
+        const nodeName = element.getAttribute('name') || element.tagName;
+        const folder = gui.addFolder(`${element.tagName}: ${nodeName}`);
+
+        const inputs = Array.from(element.children).filter(c => c.tagName === 'input');
+        for (const input of inputs)
+        {
+            const inputName = input.getAttribute('name') || 'input';
+            const type = input.getAttribute('type') || '';
+            const valStr = input.getAttribute('value');
+            const nodename = input.getAttribute('nodename');
+            const interfacename = input.getAttribute('interfacename');
+
+            if (nodename || interfacename || valStr === null)
+            {
+                // Connected or valueless input — show read-only
+                const label = nodename ? `\u2192 ${nodename}` : interfacename ? `\u2194 ${interfacename}` : `(${type})`;
+                const obj = {};
+                obj[inputName] = label;
+                folder.add(obj, inputName).name(inputName).disable();
+            }
+            else
+            {
+                this._addInputControl(folder, input, inputName, type, valStr);
+            }
+        }
+
+        gui.open();
+        folder.open();
+    }
+
+    _addInputControl(folder, inputElem, name, type, valStr)
+    {
+        const props = {};
+        try
+        {
+            switch (type)
+            {
+                case 'float':
+                {
+                    props[name] = parseFloat(valStr) || 0;
+                    const min = parseFloat(inputElem.getAttribute('uisoftmin') ?? inputElem.getAttribute('uimin') ?? '0') || 0;
+                    const max = parseFloat(inputElem.getAttribute('uisoftmax') ?? inputElem.getAttribute('uimax') ?? '1') || 1;
+                    const step = (max - min) / 1000;
+                    folder.add(props, name, min, max, step).name(name).onChange(val =>
+                    {
+                        inputElem.setAttribute('value', String(val));
+                    });
+                    break;
+                }
+                case 'integer':
+                {
+                    props[name] = parseInt(valStr) || 0;
+                    folder.add(props, name).name(name).step(1).onChange(val =>
+                    {
+                        inputElem.setAttribute('value', String(Math.round(val)));
+                    });
+                    break;
+                }
+                case 'boolean':
+                {
+                    props[name] = valStr === 'true';
+                    folder.add(props, name).name(name).onChange(val =>
+                    {
+                        inputElem.setAttribute('value', val ? 'true' : 'false');
+                    });
+                    break;
+                }
+                case 'color3':
+                {
+                    const parts = valStr.split(/\s+/).map(parseFloat);
+                    const r = Math.round((parts[0] || 0) * 255);
+                    const g = Math.round((parts[1] || 0) * 255);
+                    const b = Math.round((parts[2] || 0) * 255);
+                    props[name] = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+                    folder.addColor(props, name).name(name).onChange(val =>
+                    {
+                        const hex = val.replace('#', '');
+                        const fr = parseInt(hex.slice(0, 2), 16) / 255;
+                        const fg = parseInt(hex.slice(2, 4), 16) / 255;
+                        const fb = parseInt(hex.slice(4, 6), 16) / 255;
+                        inputElem.setAttribute('value', `${fr} ${fg} ${fb}`);
+                    });
+                    break;
+                }
+                case 'color4':
+                {
+                    const parts = valStr.split(/\s+/).map(parseFloat);
+                    const r = Math.round((parts[0] || 0) * 255);
+                    const g = Math.round((parts[1] || 0) * 255);
+                    const b = Math.round((parts[2] || 0) * 255);
+                    const a = parts[3] !== undefined ? parts[3] : 1;
+                    props[name] = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+                    folder.addColor(props, name).name(name).onChange(val =>
+                    {
+                        const hex = val.replace('#', '');
+                        const fr = parseInt(hex.slice(0, 2), 16) / 255;
+                        const fg = parseInt(hex.slice(2, 4), 16) / 255;
+                        const fb = parseInt(hex.slice(4, 6), 16) / 255;
+                        inputElem.setAttribute('value', `${fr} ${fg} ${fb} ${a}`);
+                    });
+                    break;
+                }
+                case 'vector2':
+                case 'vector3':
+                case 'vector4':
+                {
+                    const components = valStr.split(/\s+/).map(parseFloat);
+                    const labels = ['x', 'y', 'z', 'w'];
+                    const count = type === 'vector2' ? 2 : type === 'vector3' ? 3 : 4;
+                    for (let i = 0; i < count; i++)
+                    {
+                        const key = `${name}_${labels[i]}`;
+                        props[key] = components[i] || 0;
+                        folder.add(props, key).name(`${name}.${labels[i]}`).onChange(() =>
+                        {
+                            const updated = Array.from({ length: count }, (_, j) => props[`${name}_${labels[j]}`]);
+                            inputElem.setAttribute('value', updated.join(' '));
+                        });
+                    }
+                    break;
+                }
+                default:
+                {
+                    props[name] = valStr || '';
+                    folder.add(props, name).name(name).onChange(val =>
+                    {
+                        inputElem.setAttribute('value', val);
+                    });
+                    break;
+                }
+            }
+        }
+        catch (e)
+        {
+            console.warn('MtlxGraphView: could not add GUI control for', name, e);
+        }
     }
 
     _clearGraph(message)
