@@ -55,6 +55,13 @@ class MX_GENGLSL_API PathTracerGlslShaderGenerator : public EsslShaderGenerator
     static const string TARGET;
 
   protected:
+    /// Emit the path tracer closure stage in place of the forward-shading pixel
+    /// stage. Instead of vertex/pixel rasterization with an explicit light loop,
+    /// this emits the closure entry points (EvalMtlxPureClosure /
+    /// SampleMtlxPureClosure) consumed by the Monte Carlo integrator, reusing the
+    /// upstream "genglsl" node function definitions for the BSDF/EDF bricks.
+    void emitPixelStage(const ShaderGraph& graph, GenContext& context, ShaderStage& stage) const override;
+
     /// Raise a named, explicit error for an unsupported node/closure.
     ///
     /// Used to guarantee "no silent failure": when a document references a
