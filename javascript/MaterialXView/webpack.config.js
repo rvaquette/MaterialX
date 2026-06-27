@@ -39,6 +39,16 @@ module.exports = {
         path: path.resolve(__dirname, 'dist')
     },
     mode: "development",
+    devServer: {
+        // Allow the DWARF DevTools extension to re-fetch the .wasm for debug symbols.
+        headers: {
+            "Access-Control-Allow-Origin": "*"
+        },
+        // Serve .wasm with the correct MIME type.
+        devMiddleware: {
+            mimeTypes: { wasm: "application/wasm" }
+        }
+    },
     plugins: [
         new HtmlWebpackPlugin({
             templateParameters: {

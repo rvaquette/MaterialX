@@ -528,30 +528,9 @@ This folder contains the standard data libraries for MaterialX, providing declar
     <!-- Sheen layer -->
 
     <!-- Compute sheen intensity = max(sheen_color.r, sheen_color.g, sheen_color.b) -->
-    <extract name="sheen_color_r" type="float">
+    <maxcomponent name="sheen_intensity" type="float">
       <input name="in" type="color3" interfacename="sheen_color" />
-      <input name="index" type="integer" value="0" />
-    </extract>
-
-    <extract name="sheen_color_g" type="float">
-      <input name="in" type="color3" interfacename="sheen_color" />
-      <input name="index" type="integer" value="1" />
-    </extract>
-
-    <extract name="sheen_color_b" type="float">
-      <input name="in" type="color3" interfacename="sheen_color" />
-      <input name="index" type="integer" value="2" />
-    </extract>
-
-    <max name="sheen_color_max_rg" type="float">
-      <input name="in1" type="float" nodename="sheen_color_r" />
-      <input name="in2" type="float" nodename="sheen_color_g" />
-    </max>
-
-    <max name="sheen_intensity" type="float">
-      <input name="in1" type="float" nodename="sheen_color_max_rg" />
-      <input name="in2" type="float" nodename="sheen_color_b" />
-    </max>
+    </maxcomponent>
 
     <multiply name="sheen_roughness_sq" type="float">
       <input name="in1" type="float" interfacename="sheen_roughness" />
@@ -2246,26 +2225,9 @@ This folder contains the standard data libraries for MaterialX, providing declar
       <input name="in1" type="vector3" nodename="extinction_coeff" />
       <input name="in2" type="vector3" nodename="scattering_coeff" />
     </subtract>
-    <extract name="absorption_coeff_x" type="float">
+    <mincomponent name="absorption_coeff_min" type="float">
       <input name="in" type="vector3" nodename="absorption_coeff" />
-      <input name="index" type="integer" value="0" />
-    </extract>
-    <extract name="absorption_coeff_y" type="float">
-      <input name="in" type="vector3" nodename="absorption_coeff" />
-      <input name="index" type="integer" value="1" />
-    </extract>
-    <extract name="absorption_coeff_z" type="float">
-      <input name="in" type="vector3" nodename="absorption_coeff" />
-      <input name="index" type="integer" value="2" />
-    </extract>
-    <min name="absorption_coeff_min_x_y" type="float">
-      <input name="in1" type="float" nodename="absorption_coeff_x" />
-      <input name="in2" type="float" nodename="absorption_coeff_y" />
-    </min>
-    <min name="absorption_coeff_min" type="float">
-      <input name="in1" type="float" nodename="absorption_coeff_min_x_y" />
-      <input name="in2" type="float" nodename="absorption_coeff_z" />
-    </min>
+    </mincomponent>
     <convert name="absorption_coeff_min_vector" type="vector3">
       <input name="in" type="float" nodename="absorption_coeff_min" />
     </convert>
@@ -3496,6 +3458,8 @@ This folder contains the standard data libraries for MaterialX, providing declar
     <input name="tangent" type="vector3" defaultgeomprop="Tworld" />
     <input name="opacity" type="color3" value="1, 1, 1" />
     <input name="thin_walled" type="boolean" value="false" />
+    <input name="thin_film_thickness" type="float" value="0.0" />
+    <input name="thin_film_IOR" type="float" value="1.5" />
 
     <output name="base_color_out" type="color3" />
     <output name="metallic_out" type="float" />
@@ -3513,6 +3477,9 @@ This folder contains the standard data libraries for MaterialX, providing declar
     <output name="sheen_roughness_out" type="float" />
     <output name="clearcoat_out" type="float" />
     <output name="clearcoat_roughness_out" type="float" />
+    <output name="iridescence_out" type="float" />
+    <output name="iridescence_ior_out" type="float" />
+    <output name="iridescence_thickness_out" type="float" />
     <output name="dispersion_out" type="float" />
     <output name="emissive_out" type="color3" />
     <output name="emissive_strength_out" type="float" />
@@ -3568,26 +3535,31 @@ This folder contains the standard data libraries for MaterialX, providing declar
       <input name="in1" type="vector3" nodename="coatColorScaledVector" />
       <input name="in2" type="vector3" nodename="constantOneThirdVector" />
     </dotproduct>
-
-    <!-- Metallic  -->
     <ifequal name="baseColor" type="color3">
       <input name="value1" type="float" nodename="hasCoatColor" />
       <input name="value2" type="float" value="0" />
       <input name="in1" type="color3" nodename="scaledBaseColor" />
       <input name="in2" type="color3" nodename="mixedBaseColor" />
     </ifequal>
+
+    <!-- Transmission influence on BaseColor-->
     <ifgreater name="transmissionBaseColor" type="color3">
       <input name="value1" type="float" interfacename="transmission_depth" />
       <input name="value2" type="float" value="0" />
       <input name="in1" type="color3" value="1, 1, 1" />
       <input name="in2" type="color3" interfacename="transmission_color" />
     </ifgreater>
-    <ifgreater name="base_color" type="color3">
-      <input name="value1" type="float" interfacename="transmission" />
-      <input name="value2" type="float" value="0" />
-      <input name="in1" type="color3" nodename="transmissionBaseColor" />
-      <input name="in2" type="color3" nodename="baseColor" />
-    </ifgreater>
+    <multiply name="transmissionWeightSq" type="float">
+      <input name="in1" type="float" interfacename="transmission" />
+      <input name="in2" type="float" interfacename="transmission" />
+    </multiply>
+    <mix name="transmissionBaseColorMix" type="color3">
+      <input name="fg" type="color3" nodename="transmissionBaseColor" />
+      <input name="bg" type="color3" nodename="baseColor" />
+      <input name="mix" type="float" nodename="transmissionWeightSq" />
+    </mix>
+
+    <!-- Metallic  -->
     <dot name="metallic" type="float">
       <input name="in" type="float" interfacename="metalness" />
     </dot>
@@ -3718,6 +3690,23 @@ This folder contains the standard data libraries for MaterialX, providing declar
       <input name="in2" type="float" nodename="dispersion_from_abbe" />
     </ifequal>
 
+    <!-- Iridescence -->
+    <ifgreater name="iridescence" type="float">
+      <input name="value1" type="float" interfacename="thin_film_thickness" />
+      <input name="value2" type="float" value="0.0" />
+      <input name="in1" type="float" value="1.0" />
+      <input name="in2" type="float" value="0.0" />
+    </ifgreater>
+    <ifgreater name="iridescence_ior" type="float">
+      <input name="value1" type="float" interfacename="thin_film_thickness" />
+      <input name="value2" type="float" value="0.0" />
+      <input name="in1" type="float" interfacename="thin_film_IOR" />
+      <input name="in2" type="float" value="1.3" />
+    </ifgreater>
+    <dot name="iridescence_thickness" type="float">
+      <input name="in" type="float" interfacename="thin_film_thickness" />
+    </dot>
+
     <!-- Geometry -->
     <dot name="normal" type="vector3">
       <input name="in" type="vector3" interfacename="normal" />
@@ -3743,7 +3732,7 @@ This folder contains the standard data libraries for MaterialX, providing declar
       <input name="in2" type="integer" value="2" />
     </ifequal>
 
-    <output name="base_color_out" type="color3" nodename="base_color" />
+    <output name="base_color_out" type="color3" nodename="transmissionBaseColorMix" />
     <output name="metallic_out" type="float" nodename="metallic" />
     <output name="roughness_out" type="float" nodename="roughness" />
     <output name="specular_out" type="float" nodename="specular" />
@@ -3759,6 +3748,9 @@ This folder contains the standard data libraries for MaterialX, providing declar
     <output name="sheen_roughness_out" type="float" nodename="sqrt_sheen_roughness" />
     <output name="clearcoat_out" type="float" nodename="clearcoat" />
     <output name="clearcoat_roughness_out" type="float" nodename="clearcoat_roughness" />
+    <output name="iridescence_out" type="float" nodename="iridescence" />
+    <output name="iridescence_ior_out" type="float" nodename="iridescence_ior" />
+    <output name="iridescence_thickness_out" type="float" nodename="iridescence_thickness" />
     <output name="dispersion_out" type="float" nodename="dispersion" />
     <output name="emissive_out" type="color3" nodename="emissive" />
     <output name="emissive_strength_out" type="float" nodename="emissive_strength" />
@@ -4638,14 +4630,28 @@ This folder contains the standard data libraries for MaterialX, providing declar
   </nodegraph>
 
   <!-- Node: UsdTransform2d -->
+  <!-- Note : The UsdTransform2d node transforms texture coordinates, not the
+       textures themselves, so to get the effect of moving, resizing, or
+       rotating an image being applied to a surface, one must apply the inverse
+       transformation of how you expect the image to move. -->
   <nodegraph name="IMP_UsdTransform2d" nodedef="ND_UsdTransform2d">
-    <place2d name="placement" type="vector2">
-      <input name="texcoord" type="vector2" interfacename="in" />
-      <input name="scale" type="vector2" interfacename="scale" />
-      <input name="rotate" type="float" interfacename="rotation" />
-      <input name="offset" type="vector2" interfacename="translation" />
-    </place2d>
-    <output name="out" type="vector2" nodename="placement" />
+    <multiply name="N_applyscale" type="vector2">
+      <input name="in1" type="vector2" interfacename="in" />
+      <input name="in2" type="vector2" interfacename="scale" />
+    </multiply>
+    <multiply name="N_invrot" type="float">
+      <input name="in1" type="float" value="-1" />
+      <input name="in2" type="float" interfacename="rotation" />
+    </multiply>
+    <rotate2d name="N_applyrot" type="vector2">
+      <input name="in" type="vector2" nodename="N_applyscale" />
+      <input name="amount" type="float" nodename="N_invrot" />
+    </rotate2d>
+    <add name="N_applyoffset" type="vector2">
+      <input name="in1" type="vector2" nodename="N_applyrot" />
+      <input name="in2" type="vector2" interfacename="translation" />
+    </add>
+    <output name="out" type="vector2" nodename="N_applyoffset" />
   </nodegraph>
 
 </materialx>
@@ -6460,19 +6466,6 @@ float mx_ggx_dir_albedo(float NdotV, float alpha, float F0, float F90)
     return mx_ggx_dir_albedo(NdotV, alpha, vec3(F0), vec3(F90)).x;
 }
 
-// https://blog.selfshadow.com/publications/turquin/ms_comp_final.pdf
-// Equations 14 and 16
-vec3 mx_ggx_energy_compensation(float NdotV, float alpha, vec3 Fss)
-{
-    float Ess = mx_ggx_dir_albedo(NdotV, alpha, 1.0, 1.0);
-    return 1.0 + Fss * (1.0 - Ess) / Ess;
-}
-
-float mx_ggx_energy_compensation(float NdotV, float alpha, float Fss)
-{
-    return mx_ggx_energy_compensation(NdotV, alpha, vec3(Fss)).x;
-}
-
 // Compute the average of an anisotropic alpha pair.
 float mx_average_alpha(vec2 alpha)
 {
@@ -6796,6 +6789,28 @@ vec3 mx_ggx_dir_albedo(float NdotV, float alpha, FresnelData fd)
     {
         return mx_ggx_dir_albedo(NdotV, alpha, fd.F0, fd.F90);
     }
+}
+
+// Compute the cosine-weighted average of the Fresnel reflectance over the hemisphere.
+// https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_slides_v2.pdf
+vec3 mx_fresnel_average(FresnelData fd)
+{
+    vec3 F0 = mx_compute_fresnel(1.0, fd);
+    vec3 F90 = (fd.model == FRESNEL_MODEL_SCHLICK && !fd.airy) ? fd.F90 : vec3(1.0);
+
+    // The constant 1/21 is exact for a Schlick term with an exponent of 5, while for
+    // a generalized Schlick exponent n it would be 2 / ((n + 1) * (n + 2)).
+    return F0 + (F90 - F0) * (1.0 / 21.0);
+}
+
+// Multiple-scattering energy compensation for the GGX microfacet model.
+// https://blog.selfshadow.com/publications/turquin/ms_comp_final.pdf
+// Equations 14 and 16
+vec3 mx_ggx_energy_compensation(float NdotV, float alpha, FresnelData fd)
+{
+    vec3 Fss = mx_fresnel_average(fd);
+    float Ess = mx_ggx_dir_albedo(NdotV, alpha, 1.0, 1.0);
+    return 1.0 + Fss * (1.0 - Ess) / Ess;
 }
 
 // Compute the refraction of a ray through a solid sphere.
@@ -7281,7 +7296,7 @@ void mx_chiang_hair_bsdf(ClosureData closureData, vec3 tint_R, vec3 tint_TT, vec
         {
             tint[i] = max(tint[i], vec3(0.0));
             float Mp = mx_hair_longitudinal_scattering(angles[i].x, angles[i].y, sinThetaO, cosThetaO, vs[i].x);
-            float Np = (i == 3) ?  (1.0 / 2.0 * M_PI) : mx_hair_azimuthal_scattering(phi, i, vs[i].y, gammaO, gammaT);
+            float Np = mx_hair_azimuthal_scattering(phi, i, vs[i].y, gammaO, gammaT);
             F += Mp * Np * tint[i] * Ap[i];
         }
 
@@ -7293,7 +7308,6 @@ void mx_chiang_hair_bsdf(ClosureData closureData, vec3 tint_R, vec3 tint_TT, vec
 
         float NdotV = clamp(dot(N, V), M_FLOAT_EPS, 1.0);
         FresnelData fd = mx_init_fresnel_dielectric(ior, 0.0, 1.0);
-        vec3 F = mx_compute_fresnel(NdotV, fd);
 
         vec2 roughness = (roughness_R + roughness_TT + roughness_TRT) / vec2(3.0);  // ?
         vec2 safeAlpha = clamp(roughness, M_FLOAT_EPS, 1.0);
@@ -7301,7 +7315,7 @@ void mx_chiang_hair_bsdf(ClosureData closureData, vec3 tint_R, vec3 tint_TT, vec
 
         // Use GGX to match the behavior of mx_environment_radiance.
         float F0 = mx_ior_to_f0(ior);
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
         vec3 dirAlbedo = mx_ggx_dir_albedo(NdotV, avgAlpha, F0, 1.0) * comp;
 
         vec3 Li = mx_environment_radiance(N, V, X, safeAlpha, 0, fd);
@@ -7349,15 +7363,14 @@ void mx_conductor_bsdf(ClosureData closureData, float weight, vec3 ior_n, vec3 i
         float D = mx_ggx_NDF(Ht, safeAlpha);
         float G = mx_ggx_smith_G2(NdotL, NdotV, avgAlpha);
 
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
 
         // Note: NdotL is cancelled out
         bsdf.response = D * F * G * comp * closureData.occlusion * weight / (4.0 * NdotV);
     }
     else if (closureData.closureType == CLOSURE_TYPE_INDIRECT)
     {
-        vec3 F = mx_compute_fresnel(NdotV, fd);
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
         vec3 Li = mx_environment_radiance(N, V, X, safeAlpha, distribution, fd);
         bsdf.response = Li * comp * weight;
     }
@@ -7408,7 +7421,7 @@ void mx_dielectric_bsdf(ClosureData closureData, float weight, vec3 tint, float 
         float D = mx_ggx_NDF(Ht, safeAlpha);
         float G = mx_ggx_smith_G2(NdotL, NdotV, avgAlpha);
 
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
         vec3 dirAlbedo = mx_ggx_dir_albedo(NdotV, avgAlpha, F0, 1.0) * comp;
         bsdf.throughput = 1.0 - dirAlbedo * weight;
 
@@ -7416,9 +7429,7 @@ void mx_dielectric_bsdf(ClosureData closureData, float weight, vec3 tint, float 
     }
     else if (closureData.closureType == CLOSURE_TYPE_TRANSMISSION)
     {
-        vec3 F = mx_compute_fresnel(NdotV, fd);
-
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
         vec3 dirAlbedo = mx_ggx_dir_albedo(NdotV, avgAlpha, F0, 1.0) * comp;
         bsdf.throughput = 1.0 - dirAlbedo * weight;
 
@@ -7429,9 +7440,7 @@ void mx_dielectric_bsdf(ClosureData closureData, float weight, vec3 tint, float 
     }
     else if (closureData.closureType == CLOSURE_TYPE_INDIRECT)
     {
-        vec3 F = mx_compute_fresnel(NdotV, fd);
-
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
         vec3 dirAlbedo = mx_ggx_dir_albedo(NdotV, avgAlpha, F0, 1.0) * comp;
         bsdf.throughput = 1.0 - dirAlbedo * weight;
 
@@ -7496,7 +7505,7 @@ void mx_generalized_schlick_bsdf(ClosureData closureData, float weight, vec3 col
         float D = mx_ggx_NDF(Ht, safeAlpha);
         float G = mx_ggx_smith_G2(NdotL, NdotV, avgAlpha);
 
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
         vec3 dirAlbedo = mx_ggx_dir_albedo(NdotV, avgAlpha, safeColor0, safeColor90) * comp;
         float avgDirAlbedo = dot(dirAlbedo, vec3(1.0 / 3.0));
         bsdf.throughput = vec3(1.0 - avgDirAlbedo * weight);
@@ -7506,9 +7515,7 @@ void mx_generalized_schlick_bsdf(ClosureData closureData, float weight, vec3 col
     }
     else if (closureData.closureType == CLOSURE_TYPE_TRANSMISSION)
     {
-        vec3 F = mx_compute_fresnel(NdotV, fd);
-
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
         vec3 dirAlbedo = mx_ggx_dir_albedo(NdotV, avgAlpha, safeColor0, safeColor90) * comp;
         float avgDirAlbedo = dot(dirAlbedo, vec3(1.0 / 3.0));
         bsdf.throughput = vec3(1.0 - avgDirAlbedo * weight);
@@ -7522,9 +7529,7 @@ void mx_generalized_schlick_bsdf(ClosureData closureData, float weight, vec3 col
     }
     else if (closureData.closureType == CLOSURE_TYPE_INDIRECT)
     {
-        vec3 F = mx_compute_fresnel(NdotV, fd);
-
-        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, F);
+        vec3 comp = mx_ggx_energy_compensation(NdotV, avgAlpha, fd);
         vec3 dirAlbedo = mx_ggx_dir_albedo(NdotV, avgAlpha, safeColor0, safeColor90) * comp;
         float avgDirAlbedo = dot(dirAlbedo, vec3(1.0 / 3.0));
         bsdf.throughput = vec3(1.0 - avgDirAlbedo * weight);
@@ -8811,7 +8816,7 @@ vec3 mx_rotate_flake(vec3 p, vec3 i)
         vz * sx          , vz * sy          , 1.0 - z
     );
 
-    return m * p;
+    return mx_matrix_mul(m, p);
 }
 
 // compute a flake probability for a given flake coverage density x
@@ -8900,7 +8905,8 @@ void mx_flake(
     float xi1 = flake_noise.y;
 
     rand = flake_noise.z;
-    id = int(rand * 2147483647.0);
+    // 2^24 - 1 is exact in float32, keeping id stable across precisions.
+    id = int(rand * 16777215.0);
     presence = flake_priority;
 
     float phi = M_PI * 2.0 * xi0;
@@ -10389,7 +10395,7 @@ void mx_hsvtorgb_color3(vec3 _in, out vec3 result)
 
 void mx_hsvtorgb_color4(vec4 _in, out vec4 result)
 {
-    result = vec4(mx_hsvtorgb(_in.rgb), 1.0);
+    result = vec4(mx_hsvtorgb(_in.rgb), _in.a);
 }
 #include "lib/$fileTransformUv"
 
@@ -10563,7 +10569,7 @@ void mx_rgbtohsv_color3(vec3 _in, out vec3 result)
 
 void mx_rgbtohsv_color4(vec4 _in, out vec4 result)
 {
-    result = vec4(mx_rgbtohsv(_in.rgb), 1.0);
+    result = vec4(mx_rgbtohsv(_in.rgb), _in.a);
 }
 void mx_rotate_vector2(vec2 _in, float amount, out vec2 result)
 {
@@ -10572,24 +10578,18 @@ void mx_rotate_vector2(vec2 _in, float amount, out vec2 result)
     float ca = mx_cos(rotationRadians);
     result = vec2(ca*_in.x + sa*_in.y, -sa*_in.x + ca*_in.y);
 }
-mat4 mx_rotationMatrix(vec3 axis, float angle)
-{
-    axis = normalize(axis);
-    float s = mx_sin(angle);
-    float c = mx_cos(angle);
-    float oc = 1.0 - c;
-
-    return mat4(oc * axis.x * axis.x + c,           oc * axis.x * axis.y - axis.z * s,  oc * axis.z * axis.x + axis.y * s,  0.0,
-                oc * axis.x * axis.y + axis.z * s,  oc * axis.y * axis.y + c,           oc * axis.y * axis.z - axis.x * s,  0.0,
-                oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c,           0.0,
-                0.0,                                0.0,                                0.0,                                1.0);
-}
-
 void mx_rotate_vector3(vec3 _in, float amount, vec3 axis, out vec3 result)
 {
+    // Based on https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula, where the
+    // Wikipedia formula follows v' = M * v and MaterialX follows v' = v * M, thus the
+    // order of parameters to cross are reversed.
+
+    axis = normalize(axis);
     float rotationRadians = mx_radians(amount);
-    mat4 m = mx_rotationMatrix(axis, rotationRadians);
-    result = mx_matrix_mul(m, vec4(_in, 1.0)).xyz;
+    float s = mx_sin(rotationRadians);
+    float c = mx_cos(rotationRadians);
+    float oc = 1.0 - c;
+    result = _in * c + cross(_in, axis) * s + axis * dot(axis, _in) * oc;
 }
 void mx_smoothstep_float(float val, float low, float high, out float result)
 {
@@ -14739,7 +14739,8 @@ void mx_flake(
     float xi1 = flake_noise[1];
 
     rand = flake_noise[2];
-    id = (int)(rand * 2147483647.0);
+    // 2^24 - 1 is exact in float32, keeping id stable across precisions.
+    id = (int)(rand * 16777215.0);
     presence = flake_priority;
 
     float phi = M_PI * 2.0 * xi0;
@@ -14755,9 +14756,11 @@ void mx_flake(
 // https://www.shadertoy.com/view/4djSRW
 vector2 mx_hextile_hash(vector2 p)
 {
-    vector pp3 = fmod(vector(p.x, p.y, p.x) * vector(0.1031, 0.1030, 0.0973), 1.0);
+    vector pp3 = vector(p.x, p.y, p.x) * vector(0.1031, 0.1030, 0.0973);
+    pp3 -= floor(pp3);
     pp3 += dot(pp3, vector(pp3[1], pp3[2], pp3[0]) + 33.33);
-    return fmod(vector2(pp3[0] + pp3[1], pp3[0] + pp3[2]) * vector2(pp3[2], pp3[1]), 1.0);
+    vector2 result = vector2(pp3[0] + pp3[1], pp3[0] + pp3[2]) * vector2(pp3[2], pp3[1]);
+    return result - floor(result);
 }
 
 // Christophe Schlick. "Fast Alternatives to Perlin's Bias and Gain Functions".
@@ -15010,7 +15013,9 @@ void mx_cellnoise2d_float(vector2 texcoord, output float result)
 }
 void mx_cellnoise3d_float(vector position, output float result)
 {
-    result = cellnoise(position);
+    // Use the explicit point overload for deterministic 3D cell lookup.
+    // Avoid relying on implicit vector conversion in the OSL builtin.
+    result = cellnoise(point(position));
 }
 void mx_creatematrix_vector3_matrix33(vector in1, vector in2, vector in3, output matrix result)
 {
@@ -15329,7 +15334,7 @@ void mx_hextiledimage_color3(
         return;
     }
 
-    vector2 coord = mx_transform_uv(texcoord) * tiling;
+    vector2 coord = mx_transform_uv(texcoord * tiling);
 
     HextileData tile_data = mx_hextile_coord(coord, rotation, rotationrange, scale, scalerange, offset, offsetrange);
 
@@ -15384,7 +15389,7 @@ void mx_hextiledimage_color4(
         return;
     }
 
-    vector2 coord = mx_transform_uv(texcoord) * tiling;
+    vector2 coord = mx_transform_uv(texcoord * tiling);
 
     HextileData tile_data = mx_hextile_coord(coord, rotation, rotationrange, scale, scalerange, offset, offsetrange);
 
@@ -15414,6 +15419,13 @@ void mx_hextiledimage_color4(
     // Blend colors
     result.rgb = w[0] * c[0] + w[1] * c[1] + w[2] * c[2];
     result.a = aw[0] * alpha[0] + aw[1] * alpha[1] + aw[2] * alpha[2];
+
+    // Default a missing fourth channel to one, following the MaterialX specification.
+    int channels = 0;
+    if (gettextureinfo(file.filename, "channels", channels) && channels < 4)
+    {
+        result.a = 1.0;
+    }
 }
 #include "lib/$fileTransformUv"
 #include "lib/mx_hextile.osl"
@@ -15446,7 +15458,7 @@ void mx_hextilednormalmap_vector3(
         return;
     }
 
-    vector2 coord = mx_transform_uv(texcoord) * tiling;
+    vector2 coord = mx_transform_uv(texcoord * tiling);
 
     HextileData tile_data = mx_hextile_coord(coord, rotation, rotationrange, scale, scalerange, offset, offsetrange);
 
@@ -15489,7 +15501,7 @@ void mx_hsvtorgb_color3(vector _in, output vector result)
 }
 void mx_hsvtorgb_color4(color4 _in, output color4 result)
 {
-    result = color4(transformc("hsv","rgb", _in.rgb), 1.0);
+    result = color4(transformc("hsv","rgb", _in.rgb), _in.a);
 }
 #include "lib/$fileTransformUv"
 
@@ -15538,6 +15550,13 @@ void mx_image_color4(textureresource file, string layer, color4 default_value, v
                         , "colorspace", file.colorspace
 #endif
                         );
+
+    // Default a missing fourth channel to one, following the MaterialX specification.
+    int channels = 0;
+    if (gettextureinfo(file.filename, "channels", channels) && channels < 4)
+    {
+        alpha = 1.0;
+    }
 
     out = color4(rgb, alpha);
 }
@@ -15622,6 +15641,13 @@ void mx_image_vector4(textureresource file, string layer, vector4 default_value,
                         "missingcolor", missingColor, "missingalpha", missingAlpha,
                         "swrap", uaddressmode, "twrap", vaddressmode);
 
+    // Default a missing fourth channel to one, following the MaterialX specification.
+    int channels = 0;
+    if (gettextureinfo(file.filename, "channels", channels) && channels < 4)
+    {
+        alpha = 1.0;
+    }
+
     out = vector4(rgb[0], rgb[1], rgb[2], alpha);
 }
 void mx_luminance_color3(color in, color lumacoeffs, output color result)
@@ -15680,22 +15706,8 @@ void mx_noise3d_vector4(vector4 amplitude, float pivot, vector position, output 
 }
 void mx_normalmap_vector2(vector value, vector2 normal_scale, vector N, vector T, vector B, output vector result)
 {
-    if (value == vector(0.0))
-    {
-        result = N;
-    }
-    else
-    {
-        // The OSL backend uses dPdu and dPdv for tangents and bitangents, but these vectors are not
-        // guaranteed to be orthonormal.
-        //
-        // Orthogonalize the tangent frame using Gram-Schmidt, unlike in the other backends.
-        //
-        vector v = value * 2.0 - 1.0;
-        vector Tn = normalize(T - dot(T, N) * N);
-        vector Bn = normalize(B - dot(B, N) * N - dot(B, Tn) * Tn);
-        result = normalize(Tn * v[0] * normal_scale.x + Bn * v[1] * normal_scale.y + N * v[2]);
-    }
+    vector v = (dot(value, value) == 0.0) ? vector(0.0, 0.0, 1.0) : value * 2.0 - 1.0;
+    result = normalize(T * v[0] * normal_scale.x + B * v[1] * normal_scale.y + N * v[2]);
 }
 
 void mx_normalmap_float(vector value, float normal_scale, vector N, vector T, vector B, output vector result)
@@ -15712,7 +15724,7 @@ void mx_rgbtohsv_color3(vector _in, output vector result)
 }
 void mx_rgbtohsv_color4(color4 _in, output color4 result)
 {
-    result = color4(transformc("rgb","hsv", _in.rgb), 1.0);
+    result = color4(transformc("rgb","hsv", _in.rgb), _in.a);
 }
 void mx_rotate_vector2(vector2 _in, float amount, output vector2 result)
 {
@@ -15721,25 +15733,18 @@ void mx_rotate_vector2(vector2 _in, float amount, output vector2 result)
     float ca = cos(rotationRadians);
     result = vector2(ca*_in.x + sa*_in.y, -sa*_in.x + ca*_in.y);
 }
-matrix rotationMatrix(vector axis, float angle)
-{
-    vector nAxis = normalize(axis);
-    float s = sin(angle);
-    float c = cos(angle);
-    float oc = 1.0 - c;
-
-    return matrix(oc * nAxis[0] * nAxis[0] + c,             oc * nAxis[0] * nAxis[1] - nAxis[2] * s,  oc * nAxis[2] * nAxis[0] + nAxis[1] * s,  0.0,
-                  oc * nAxis[0] * nAxis[1] + nAxis[2] * s,  oc * nAxis[1] * nAxis[1] + c,             oc * nAxis[1] * nAxis[2] - nAxis[0] * s,  0.0,
-                  oc * nAxis[2] * nAxis[0] - nAxis[1] * s,  oc * nAxis[1] * nAxis[2] + nAxis[0] * s,  oc * nAxis[2] * nAxis[2] + c,             0.0,
-                  0.0,                                      0.0,                                      0.0,                                      1.0);
-}
-
 void mx_rotate_vector3(vector _in, float amount, vector axis, output vector result)
 {
+    // Based on https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula, where the
+    // Wikipedia formula follows v' = M * v and MaterialX follows v' = v * M, thus the
+    // order of parameters to cross are reversed.
+
+    vector nAxis = normalize(axis);
     float rotationRadians = radians(amount);
-    matrix m = rotationMatrix(axis, rotationRadians);
-    vector4 trans = transform(m, vector4(_in[0], _in[1], _in[2], 1.0));
-    result = vector(trans.x, trans.y, trans.z);
+    float s = sin(rotationRadians);
+    float c = cos(rotationRadians);
+    float oc = 1.0 - c;
+    result = _in * c + cross(_in, nAxis) * s + nAxis * dot(nAxis, _in) * oc;
 }
 void mx_set_ci (
     int output_type,
@@ -16058,10 +16063,10 @@ void mx_worleynoise3d_vector3(vector position, float jitter, int style, output v
   <implementation name="IM_normal_vector3_genosl" nodedef="ND_normal_vector3" target="genosl" sourcecode="transform({{space}}, N)" />
 
   <!-- <tangent> -->
-  <implementation name="IM_tangent_vector3_genosl" nodedef="ND_tangent_vector3" target="genosl" sourcecode="transform({{space}}, normalize(dPdu))" />
+  <implementation name="IM_tangent_vector3_genosl" nodedef="ND_tangent_vector3" target="genosl" sourcecode="normalize(transform({{space}}, dPdu))" />
 
   <!-- <bitangent> -->
-  <implementation name="IM_bitangent_vector3_genosl" nodedef="ND_bitangent_vector3" target="genosl" sourcecode="transform({{space}}, normalize(dPdv))" />
+  <implementation name="IM_bitangent_vector3_genosl" nodedef="ND_bitangent_vector3" target="genosl" sourcecode="normalize(transform({{space}}, cross(N, normalize(dPdu))))" />
 
   <!-- <texcoord> -->
   <implementation name="IM_texcoord_vector2_genosl" nodedef="ND_texcoord_vector2" target="genosl" sourcecode="vector2(u,v)" />
@@ -18244,7 +18249,7 @@ int2 textureSize(SamplerTexture2D tex, int mipLevel)
 
   <!--
     Node: <flake2d>
-    3D flake pattern generator.
+    2D flake pattern generator.
   -->
   <nodedef name="ND_flake2d" node="flake2d" nodegroup="procedural2d">
     <input name="size" type="float" value="0.01" doc="Size of individual flakes." />
@@ -18254,7 +18259,7 @@ int2 textureSize(SamplerTexture2D tex, int mipLevel)
     <input name="normal" type="vector3" defaultgeomprop="Nworld" doc="Surface normal; defaults to the current world-space normal." />
     <input name="tangent" type="vector3" defaultgeomprop="Tworld" doc="Surface tangent vector, defaults to the current world-space tangent vector." />
     <input name="bitangent" type="vector3" defaultgeomprop="Bworld" doc="Surface bitangent vector, defaults to the current world-space bitangent vector." />
-    <output name="id" type="integer" default="0" doc="Unique identifier for each flake (0 for no flake)." />
+    <output name="id" type="integer" default="0" doc="Stable pseudo-random integer label for the selected flake, not guaranteed to be unique (0 for no flake)." />
     <output name="rand" type="float" default="0.0" doc="Random value per flake for additional variation (0 for no flake)." />
     <output name="presence" type="float" default="0.0" doc="Depth-based presence value per flake for additional variation (0 for no flake)." />
     <output name="flakenormal" type="vector3" default="Nworld" doc="The computed flake normal (base normal if no flake present)." />
@@ -18262,7 +18267,7 @@ int2 textureSize(SamplerTexture2D tex, int mipLevel)
 
   <!--
     Node: <flake3d>
-    2D flake pattern generator.
+    3D flake pattern generator.
   -->
   <nodedef name="ND_flake3d" node="flake3d" nodegroup="procedural3d">
     <input name="size" type="float" value="0.01" doc="Size of individual flakes." />
@@ -18272,7 +18277,7 @@ int2 textureSize(SamplerTexture2D tex, int mipLevel)
     <input name="normal" type="vector3" defaultgeomprop="Nworld" doc="Surface normal; defaults to the current world-space normal." />
     <input name="tangent" type="vector3" defaultgeomprop="Tworld" doc="Surface tangent vector, defaults to the current world-space tangent vector." />
     <input name="bitangent" type="vector3" defaultgeomprop="Bworld" doc="Surface bitangent vector, defaults to the current world-space bitangent vector." />
-    <output name="id" type="integer" default="0" doc="Unique identifier for each flake (0 for no flake)." />
+    <output name="id" type="integer" default="0" doc="Stable pseudo-random integer label for the selected flake, not guaranteed to be unique (0 for no flake)." />
     <output name="rand" type="float" default="0.0" doc="Random value per flake for additional variation (0 for no flake)." />
     <output name="presence" type="float" default="0.0" doc="Depth-based presence value per flake for additional variation (0 for no flake)." />
     <output name="flakenormal" type="vector3" default="Nworld" doc="The computed flake normal (base normal if no flake present)." />
@@ -19722,6 +19727,56 @@ int2 textureSize(SamplerTexture2D tex, int mipLevel)
     <input name="in1" type="vector4" value="0.0, 0.0, 0.0, 0.0" />
     <input name="in2" type="float" value="0.0" />
     <output name="out" type="vector4" defaultinput="in1" />
+  </nodedef>
+
+  <!--
+    Node: <mincomponent>
+    Output the minimum component of the incoming vector or color stream.
+  -->
+  <nodedef name="ND_mincomponent_color3" node="mincomponent" nodegroup="math">
+    <input name="in" type="color3" value="0.0, 0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+  <nodedef name="ND_mincomponent_color4" node="mincomponent" nodegroup="math">
+    <input name="in" type="color4" value="0.0, 0.0, 0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+  <nodedef name="ND_mincomponent_vector2" node="mincomponent" nodegroup="math">
+    <input name="in" type="vector2" value="0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+  <nodedef name="ND_mincomponent_vector3" node="mincomponent" nodegroup="math">
+    <input name="in" type="vector3" value="0.0, 0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+  <nodedef name="ND_mincomponent_vector4" node="mincomponent" nodegroup="math">
+    <input name="in" type="vector4" value="0.0, 0.0, 0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+
+  <!--
+    Node: <maxcomponent>
+    Output the maximum component of the incoming vector or color stream.
+  -->
+  <nodedef name="ND_maxcomponent_color3" node="maxcomponent" nodegroup="math">
+    <input name="in" type="color3" value="0.0, 0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+  <nodedef name="ND_maxcomponent_color4" node="maxcomponent" nodegroup="math">
+    <input name="in" type="color4" value="0.0, 0.0, 0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+  <nodedef name="ND_maxcomponent_vector2" node="maxcomponent" nodegroup="math">
+    <input name="in" type="vector2" value="0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+  <nodedef name="ND_maxcomponent_vector3" node="maxcomponent" nodegroup="math">
+    <input name="in" type="vector3" value="0.0, 0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
+  </nodedef>
+  <nodedef name="ND_maxcomponent_vector4" node="maxcomponent" nodegroup="math">
+    <input name="in" type="vector4" value="0.0, 0.0, 0.0, 0.0" />
+    <output name="out" type="float" default="0.0" />
   </nodedef>
 
   <!--
@@ -25278,6 +25333,164 @@ int2 textureSize(SamplerTexture2D tex, int mipLevel)
       <input name="which" type="integer" interfacename="operationorder" />
     </switch>
     <output name="out" type="vector2" nodename="N_switch_operationorder" />
+  </nodegraph>
+
+  <!--
+    Node: <mincomponent>
+    Output the minimum component of the incoming vector or color stream.
+  -->
+  <nodegraph name="NG_mincomponent_color3" nodedef="ND_mincomponent_color3">
+    <separate3 name="N_separate" type="multioutput">
+      <input name="in" type="color3" interfacename="in" />
+    </separate3>
+    <min name="N_min_01" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outr" />
+      <input name="in2" type="float" nodename="N_separate" output="outg" />
+    </min>
+    <min name="N_min" type="float">
+      <input name="in1" type="float" nodename="N_min_01" />
+      <input name="in2" type="float" nodename="N_separate" output="outb" />
+    </min>
+    <output name="out" type="float" nodename="N_min" />
+  </nodegraph>
+  <nodegraph name="NG_mincomponent_color4" nodedef="ND_mincomponent_color4">
+    <separate4 name="N_separate" type="multioutput">
+      <input name="in" type="color4" interfacename="in" />
+    </separate4>
+    <min name="N_min_01" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outr" />
+      <input name="in2" type="float" nodename="N_separate" output="outg" />
+    </min>
+    <min name="N_min_23" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outb" />
+      <input name="in2" type="float" nodename="N_separate" output="outa" />
+    </min>
+    <min name="N_min" type="float">
+      <input name="in1" type="float" nodename="N_min_01" />
+      <input name="in2" type="float" nodename="N_min_23" />
+    </min>
+    <output name="out" type="float" nodename="N_min" />
+  </nodegraph>
+  <nodegraph name="NG_mincomponent_vector2" nodedef="ND_mincomponent_vector2">
+    <separate2 name="N_separate" type="multioutput">
+      <input name="in" type="vector2" interfacename="in" />
+    </separate2>
+    <min name="N_min" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outx" />
+      <input name="in2" type="float" nodename="N_separate" output="outy" />
+    </min>
+    <output name="out" type="float" nodename="N_min" />
+  </nodegraph>
+  <nodegraph name="NG_mincomponent_vector3" nodedef="ND_mincomponent_vector3">
+    <separate3 name="N_separate" type="multioutput">
+      <input name="in" type="vector3" interfacename="in" />
+    </separate3>
+    <min name="N_min_01" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outx" />
+      <input name="in2" type="float" nodename="N_separate" output="outy" />
+    </min>
+    <min name="N_min" type="float">
+      <input name="in1" type="float" nodename="N_min_01" />
+      <input name="in2" type="float" nodename="N_separate" output="outz" />
+    </min>
+    <output name="out" type="float" nodename="N_min" />
+  </nodegraph>
+  <nodegraph name="NG_mincomponent_vector4" nodedef="ND_mincomponent_vector4">
+    <separate4 name="N_separate" type="multioutput">
+      <input name="in" type="vector4" interfacename="in" />
+    </separate4>
+    <min name="N_min_01" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outx" />
+      <input name="in2" type="float" nodename="N_separate" output="outy" />
+    </min>
+    <min name="N_min_23" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outz" />
+      <input name="in2" type="float" nodename="N_separate" output="outw" />
+    </min>
+    <min name="N_min" type="float">
+      <input name="in1" type="float" nodename="N_min_01" />
+      <input name="in2" type="float" nodename="N_min_23" />
+    </min>
+    <output name="out" type="float" nodename="N_min" />
+  </nodegraph>
+
+  <!--
+    Node: <maxcomponent>
+    Output the maximum component of the incoming vector or color stream.
+  -->
+  <nodegraph name="NG_maxcomponent_color3" nodedef="ND_maxcomponent_color3">
+    <separate3 name="N_separate" type="multioutput">
+      <input name="in" type="color3" interfacename="in" />
+    </separate3>
+    <max name="N_max_01" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outr" />
+      <input name="in2" type="float" nodename="N_separate" output="outg" />
+    </max>
+    <max name="N_max" type="float">
+      <input name="in1" type="float" nodename="N_max_01" />
+      <input name="in2" type="float" nodename="N_separate" output="outb" />
+    </max>
+    <output name="out" type="float" nodename="N_max" />
+  </nodegraph>
+  <nodegraph name="NG_maxcomponent_color4" nodedef="ND_maxcomponent_color4">
+    <separate4 name="N_separate" type="multioutput">
+      <input name="in" type="color4" interfacename="in" />
+    </separate4>
+    <max name="N_max_01" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outr" />
+      <input name="in2" type="float" nodename="N_separate" output="outg" />
+    </max>
+    <max name="N_max_23" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outb" />
+      <input name="in2" type="float" nodename="N_separate" output="outa" />
+    </max>
+    <max name="N_max" type="float">
+      <input name="in1" type="float" nodename="N_max_01" />
+      <input name="in2" type="float" nodename="N_max_23" />
+    </max>
+    <output name="out" type="float" nodename="N_max" />
+  </nodegraph>
+  <nodegraph name="NG_maxcomponent_vector2" nodedef="ND_maxcomponent_vector2">
+    <separate2 name="N_separate" type="multioutput">
+      <input name="in" type="vector2" interfacename="in" />
+    </separate2>
+    <max name="N_max" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outx" />
+      <input name="in2" type="float" nodename="N_separate" output="outy" />
+    </max>
+    <output name="out" type="float" nodename="N_max" />
+  </nodegraph>
+  <nodegraph name="NG_maxcomponent_vector3" nodedef="ND_maxcomponent_vector3">
+    <separate3 name="N_separate" type="multioutput">
+      <input name="in" type="vector3" interfacename="in" />
+    </separate3>
+    <max name="N_max_01" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outx" />
+      <input name="in2" type="float" nodename="N_separate" output="outy" />
+    </max>
+    <max name="N_max" type="float">
+      <input name="in1" type="float" nodename="N_max_01" />
+      <input name="in2" type="float" nodename="N_separate" output="outz" />
+    </max>
+    <output name="out" type="float" nodename="N_max" />
+  </nodegraph>
+  <nodegraph name="NG_maxcomponent_vector4" nodedef="ND_maxcomponent_vector4">
+    <separate4 name="N_separate" type="multioutput">
+      <input name="in" type="vector4" interfacename="in" />
+    </separate4>
+    <max name="N_max_01" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outx" />
+      <input name="in2" type="float" nodename="N_separate" output="outy" />
+    </max>
+    <max name="N_max_23" type="float">
+      <input name="in1" type="float" nodename="N_separate" output="outz" />
+      <input name="in2" type="float" nodename="N_separate" output="outw" />
+    </max>
+    <max name="N_max" type="float">
+      <input name="in1" type="float" nodename="N_max_01" />
+      <input name="in2" type="float" nodename="N_max_23" />
+    </max>
+    <output name="out" type="float" nodename="N_max" />
   </nodegraph>
 
   <!--

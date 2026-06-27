@@ -11,8 +11,10 @@ if NOT ["%errorlevel%"]==["0"] pause
 @echo --------------------- Build MaterialX With JavaScript ---------------------
 @echo on
 cd %MATERIALX_LOCATION%
-cmake -S . -B javascript/build -DMATERIALX_BUILD_JS=ON -DMATERIALX_EMSDK_PATH=%EMSDK_LOCATION% -G Ninja
-cmake --build javascript/build --target install --config RelWithDebInfo --parallel 2
+@rem cmake -S . -B javascript/build -DMATERIALX_BUILD_JS=ON -DMATERIALX_EMSDK_PATH=%EMSDK_LOCATION% -G Ninja
+@rem cmake --build javascript/build --target install --config RelWithDebInfo --parallel 2
+cmake -S . -B javascript/build -DMATERIALX_BUILD_JS=ON -DMATERIALX_EMSDK_PATH=%EMSDK_LOCATION% -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build javascript/build --target install
 if NOT ["%errorlevel%"]==["0"] pause
 @echo --------------------- Install JavaScript Dependencies ---------------------
 @echo on

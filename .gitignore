@@ -1,4 +1,7 @@
 build
 bin/
+out/
+.idea/
+.vs/
 .DS_Store
 CMakeUserPresets.json

@@ -81,7 +81,11 @@ endif()
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     message("JS: Building Debug")
-    string(APPEND JS_LINK_FLAGS_CORE "--bind ")
+    string(APPEND JS_COMPILE_FLAGS "-g -O0 ")
+    string(APPEND JS_LINK_FLAGS_CORE "-g -O0 --bind \
+        -s ASSERTIONS=2 \
+        -s SAFE_HEAP=1 \
+        -s STACK_OVERFLOW_CHECK=2 ")
 else()
     message("JS: Building Release")
     string(APPEND JS_LINK_FLAGS_CORE "-flto -Os --bind ")
