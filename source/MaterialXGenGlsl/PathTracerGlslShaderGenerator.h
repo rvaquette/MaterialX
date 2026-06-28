@@ -50,6 +50,11 @@ class MX_GENGLSL_API PathTracerGlslShaderGenerator : public EsslShaderGenerator
     /// output dialect remains GLSL ES 3.00 via the inherited ESSL version.
     const string& getTarget() const override { return GlslShaderGenerator::TARGET; }
 
+    /// Generate the closure shader. Forces a reduced shader interface so that
+    /// constant MaterialX inputs (base_color, roughness, ...) are folded as GLSL
+    /// literals instead of being published as unbound uniforms.
+    ShaderPtr generate(const string& name, ElementPtr element, GenContext& context) const override;
+
   public:
     /// Unique identifier for this generator (path tracer closure GLSL).
     static const string TARGET;

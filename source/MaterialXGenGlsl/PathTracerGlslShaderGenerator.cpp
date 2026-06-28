@@ -9,6 +9,8 @@
 
 #include <MaterialXGenHw/HwConstants.h>
 #include <MaterialXGenShader/Exception.h>
+#include <MaterialXGenShader/GenContext.h>
+#include <MaterialXGenShader/GenOptions.h>
 #include <MaterialXGenShader/Shader.h>
 #include <MaterialXGenShader/ShaderGraph.h>
 #include <MaterialXGenShader/ShaderNode.h>
@@ -45,6 +47,54 @@ string pathTracerStateSourceForVertexVar(const string& var, const string& typeNa
     }
     return typeName + "(0.0)";
 }
+
+// Map a published standard_surface interface input to the equivalent path tracer
+// State.mat field (read from materialsTex), so the closure uses the per-material
+// values from the material texture rather than unbound uniforms. Returns "" when
+// there is no mapping (the input keeps its authored default value).
+string pathTracerMatBindingForInput(const string& name)
+{
+    if (name == "base") return "state.mat.baseWeight";
+    if (name == "base_color") return "(state.mat.baseColor / max(state.mat.baseWeight, 1e-4))";
+    if (name == "diffuse_roughness") return "state.mat.baseDiffuseRoughness";
+    if (name == "metalness") return "state.mat.metallic";
+    if (name == "specular") return "state.mat.specularWeight";
+    if (name == "specular_color") return "state.mat.specularColor";
+    if (name == "specular_roughness") return "state.mat.roughness";
+    if (name == "specular_IOR") return "state.mat.ior";
+    if (name == "specular_anisotropy") return "state.mat.anisotropic";
+    if (name == "specular_rotation") return "state.mat.anisotropyRotation";
+    if (name == "transmission") return "state.mat.specTrans";
+    if (name == "transmission_color") return "state.mat.transmissionColor";
+    if (name == "transmission_extra_roughness") return "state.mat.transmissionExtraRoughness";
+    if (name == "transmission_depth") return "state.mat.transmissionDepth";
+    if (name == "transmission_scatter") return "state.mat.transmissionScatter";
+    if (name == "transmission_scatter_anisotropy") return "state.mat.transmissionScatterAnisotropy";
+    if (name == "transmission_dispersion") return "state.mat.transmissionDispersion";
+    if (name == "subsurface") return "state.mat.subsurface";
+    if (name == "subsurface_color") return "state.mat.subsurfaceColor";
+    if (name == "subsurface_radius") return "state.mat.subsurfaceRadiusScale";
+    if (name == "subsurface_scale") return "1.0";
+    if (name == "subsurface_anisotropy") return "state.mat.subsurfaceAnisotropy";
+    if (name == "sheen") return "state.mat.sheen";
+    if (name == "sheen_color") return "state.mat.fuzzColor";
+    if (name == "sheen_roughness") return "state.mat.fuzzRoughness";
+    if (name == "coat") return "state.mat.clearcoat";
+    if (name == "coat_color") return "state.mat.coatColor";
+    if (name == "coat_roughness") return "(1.0 - state.mat.clearcoatGloss)";
+    if (name == "coat_anisotropy") return "state.mat.coatRoughnessAnisotropy";
+    if (name == "coat_rotation") return "state.mat.coatAnisotropyRotation";
+    if (name == "coat_IOR") return "state.mat.coatIOR";
+    if (name == "coat_affect_color") return "state.mat.coatDarkening";
+    if (name == "coat_affect_roughness") return "state.mat.coatAffectRoughness";
+    if (name == "thin_film_thickness") return "state.mat.thinFilmThickness";
+    if (name == "thin_film_IOR") return "state.mat.thinFilmIor";
+    if (name == "thin_walled") return "(state.mat.thinWalled > 0.5)";
+    if (name == "emission") return "1.0";
+    if (name == "emission_color") return "state.mat.emission";
+    if (name == "opacity") return "vec3(state.mat.opacity)";
+    return "";
+}
 } // anonymous namespace
 
 // Identifier for this generator. Node implementations are still resolved via
@@ -63,6 +113,15 @@ PathTracerGlslShaderGenerator::PathTracerGlslShaderGenerator(TypeSystemPtr typeS
     // (V, N, L) closure evaluation (no forward light loop) instead of forward
     // shading; the closure entry points in emitPixelStage drive it via globals.
     registerImplementation("IM_surface_" + GlslShaderGenerator::TARGET, PathTracerSurfaceNode::create);
+}
+
+ShaderPtr PathTracerGlslShaderGenerator::generate(const string& name, ElementPtr element, GenContext& context) const
+{
+    // Fold constant standard_surface inputs (base_color, roughness, ...) as GLSL
+    // literals rather than publishing them as unbound uniforms, so the path tracer
+    // receives the authored material values without binding any uniforms.
+    context.getOptions().shaderInterfaceType = SHADER_INTERFACE_REDUCED;
+    return EsslShaderGenerator::generate(name, element, context);
 }
 
 void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, GenContext& context, ShaderStage& stage) const
@@ -88,7 +147,19 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitTypeDefinitions(context, stage);
 
     emitConstants(context, stage);
-    emitUniforms(context, stage);
+    // Emit non-interface uniform blocks (private/sampler uniforms) as real
+    // uniforms; the public material-parameter block is emitted as globals below
+    // and bound from State.mat (materialsTex) instead of unbound uniforms.
+    for (const auto& it : stage.getUniformBlocks())
+    {
+        const VariableBlock& uniforms = *it.second;
+        if (!uniforms.empty() && uniforms.getName() != HW::LIGHT_DATA && uniforms.getName() != HW::PUBLIC_UNIFORMS)
+        {
+            // assignValue = false: GLSL ES forbids initializers on uniforms.
+            emitVariableDeclarations(uniforms, _syntax->getUniformQualifier(), Syntax::SEMICOLON, context, stage, false);
+            emitLineBreak(stage);
+        }
+    }
 
     // Common math shared by the genglsl bricks.
     emitLibraryInclude("stdlib/genglsl/lib/mx_math.glsl", context, stage);
@@ -128,6 +199,17 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     }
     emitLineBreak(stage);
 
+    // standard_surface parameter interface, emitted as mutable globals with their
+    // authored default values; bound from State.mat (materialsTex) in
+    // mtlxEvalSurface so per-material values come from the material texture.
+    const VariableBlock& publicUniforms = stage.getUniformBlock(HW::PUBLIC_UNIFORMS);
+    if (!publicUniforms.empty())
+    {
+        emitComment("standard_surface parameters (bound from State.mat in mtlxEvalSurface).", stage);
+        emitVariableDeclarations(publicUniforms, EMPTY_STRING, Syntax::SEMICOLON, context, stage, true);
+        emitLineBreak(stage);
+    }
+
     emitFunctionDefinitions(graph, context, stage);
     emitLineBreak(stage);
 
@@ -136,13 +218,23 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     // surfaceshader whose .color holds the BSDF response (+ emission) for the
     // single (V, N, L) direction. Eval/Sample call this after setting the globals.
     const ShaderGraphOutputSocket* outputSocket = graph.getOutputSocket();
-    emitLine("surfaceshader mtlxEvalSurface()", stage, false);
+    emitLine("surfaceshader mtlxEvalSurface(State state)", stage, false);
     emitFunctionBodyBegin(graph, context, stage);
     // Bind the upstream geometric vertex-data variables from the path tracer State.
     for (size_t i = 0; i < vertexData.size(); ++i)
     {
         const ShaderPort* v = vertexData[i];
         emitLine(v->getVariable() + " = " + pathTracerStateSourceForVertexVar(v->getVariable(), _syntax->getTypeName(v->getType())), stage);
+    }
+    // Bind the standard_surface parameters from State.mat (materialsTex).
+    for (size_t i = 0; i < publicUniforms.size(); ++i)
+    {
+        const ShaderPort* v = publicUniforms[i];
+        const string binding = pathTracerMatBindingForInput(v->getName());
+        if (!binding.empty())
+        {
+            emitLine(v->getVariable() + " = " + binding, stage);
+        }
     }
     emitFunctionCalls(graph, context, stage, ShaderNode::Classification::TEXTURE);
     for (ShaderGraphOutputSocket* socket : graph.getOutputSockets())
@@ -188,7 +280,7 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("g_ptBitangent = state.bitangent", stage);
     emitLine("g_ptTexcoord = state.texCoord", stage);
     emitLine("g_ptClosureType = isReflect ? CLOSURE_TYPE_REFLECTION : CLOSURE_TYPE_TRANSMISSION", stage);
-    emitLine("surfaceshader pt_surf = mtlxEvalSurface()", stage);
+    emitLine("surfaceshader pt_surf = mtlxEvalSurface(state)", stage);
     emitComment("TODO(T012-T014): per-closure importance-sampling pdf; cosine pdf placeholder.", stage);
     emitLine("pdf = max(dot(N, L), 0.0) * M_PI_INV", stage);
     emitLine("return pt_surf.color", stage);
@@ -216,7 +308,7 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("g_ptBitangent = state.bitangent", stage);
     emitLine("g_ptTexcoord = state.texCoord", stage);
     emitLine("g_ptClosureType = CLOSURE_TYPE_REFLECTION", stage);
-    emitLine("surfaceshader pt_surf = mtlxEvalSurface()", stage);
+    emitLine("surfaceshader pt_surf = mtlxEvalSurface(state)", stage);
     emitLine("pdf = max(dot(N, L), 0.0) * M_PI_INV", stage);
     emitLine("return pt_surf.color", stage);
     emitScopeEnd(stage);
