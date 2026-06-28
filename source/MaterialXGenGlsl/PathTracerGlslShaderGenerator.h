@@ -75,6 +75,13 @@ class MX_GENGLSL_API PathTracerGlslShaderGenerator : public EsslShaderGenerator
     /// whose message names the offending node/closure and the reason. The
     /// JavaScript bindings surface this as a JS exception.
     [[noreturn]] void throwUnsupportedClosure(const string& nodeName, const string& reason) const;
+
+    /// Emit a texture-map override for a standard_surface input that the path
+    /// tracer can texture, sampling the texture array (textureMapsArrayTex) at
+    /// the per-material layer (State.mat.*TexID), guarded so untextured materials
+    /// are unchanged. Color inputs are linearized from sRGB; data inputs stay
+    /// linear (FR-012/FR-014). No-op for inputs without a texture slot.
+    void emitPathTracerTextureOverride(const string& inputName, const string& inputVar, ShaderStage& stage) const;
 };
 
 MATERIALX_NAMESPACE_END

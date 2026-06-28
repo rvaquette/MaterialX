@@ -235,6 +235,15 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
         {
             emitLine(v->getVariable() + " = " + binding, stage);
         }
+
+        // T016/FR-012/FR-014: textured inputs sample the path tracer texture
+        // array (textureMapsArrayTex) at the per-material layer instead of being
+        // reduced to a constant. Color inputs are linearized from sRGB (pow 2.2);
+        // data inputs (roughness/metalness) stay linear. Guarded by the texID so
+        // untextured materials keep their authored State.mat values (no change).
+        // In pure mode GetMaterial defers these maps to the closure (see
+        // pathtrace.glsl), so there is no double texturing.
+        emitPathTracerTextureOverride(v->getName(), v->getVariable(), stage);
     }
     emitFunctionCalls(graph, context, stage, ShaderNode::Classification::TEXTURE);
     for (ShaderGraphOutputSocket* socket : graph.getOutputSockets())
@@ -319,6 +328,55 @@ void PathTracerGlslShaderGenerator::throwUnsupportedClosure(const string& nodeNa
 {
     throw ExceptionShaderGenError(
         "PathTracerGlslShaderGenerator: unsupported node/closure '" + nodeName + "': " + reason);
+}
+
+void PathTracerGlslShaderGenerator::emitPathTracerTextureOverride(const string& inputName, const string& inputVar, ShaderStage& stage) const
+{
+    // Map the standard_surface input to the path tracer texture slot (layer in
+    // textureMapsArrayTex) and the channel/colorspace convention, mirroring
+    // GetMaterial() in shaders/common/pathtrace.glsl so the generated closure
+    // matches the path tracer texturing of the classic Material path.
+    //   - baseColorTexID        : base color (sRGB) + opacity in .a
+    //   - metallicRoughnessTexID : metalness (.b) / roughness (.g), linear data
+    //   - emissionmapTexID       : emission color (sRGB)
+    // The normal map is applied to State in GetMaterial (FR-013); the closure
+    // consumes the perturbed frame and does not resample it here.
+    string layer;
+    string assign;
+    if (inputName == "base_color")
+    {
+        layer = "state.mat.baseColorTexID";
+        assign = inputVar + " *= pow(texture(textureMapsArrayTex, vec3(g_ptTexcoord * state.mat.uvScale, float(" + layer + "))).rgb, vec3(2.2))";
+    }
+    else if (inputName == "opacity")
+    {
+        layer = "state.mat.baseColorTexID";
+        assign = inputVar + " *= texture(textureMapsArrayTex, vec3(g_ptTexcoord * state.mat.uvScale, float(" + layer + "))).a";
+    }
+    else if (inputName == "metalness")
+    {
+        layer = "state.mat.metallicRoughnessTexID";
+        assign = inputVar + " = clamp(texture(textureMapsArrayTex, vec3(g_ptTexcoord * state.mat.uvScale, float(" + layer + "))).b, 0.0, 1.0)";
+    }
+    else if (inputName == "specular_roughness")
+    {
+        layer = "state.mat.metallicRoughnessTexID";
+        assign = inputVar + " = texture(textureMapsArrayTex, vec3(g_ptTexcoord * state.mat.uvScale, float(" + layer + "))).g";
+    }
+    else if (inputName == "emission_color")
+    {
+        layer = "state.mat.emissionmapTexID";
+        assign = inputVar + " = pow(texture(textureMapsArrayTex, vec3(g_ptTexcoord * state.mat.uvScale, float(" + layer + "))).rgb, vec3(2.2))";
+    }
+    else
+    {
+        return;
+    }
+
+    emitLine("if (" + layer + " >= 0)", stage, false);
+    emitScopeBegin(stage);
+    emitLine(assign, stage);
+    emitScopeEnd(stage);
 }
 
 MATERIALX_NAMESPACE_END
