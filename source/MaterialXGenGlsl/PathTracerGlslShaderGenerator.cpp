@@ -74,7 +74,7 @@ string pathTracerMatBindingForInput(const string& name)
     if (name == "subsurface") return "state.mat.subsurface";
     if (name == "subsurface_color") return "state.mat.subsurfaceColor";
     if (name == "subsurface_radius") return "state.mat.subsurfaceRadiusScale";
-    if (name == "subsurface_scale") return "1.0";
+    if (name == "subsurface_scale") return "state.mat.subsurfaceScale";
     if (name == "subsurface_anisotropy") return "state.mat.subsurfaceAnisotropy";
     if (name == "sheen") return "state.mat.sheen";
     if (name == "sheen_color") return "state.mat.fuzzColor";
@@ -90,8 +90,8 @@ string pathTracerMatBindingForInput(const string& name)
     if (name == "thin_film_thickness") return "state.mat.thinFilmThickness";
     if (name == "thin_film_IOR") return "state.mat.thinFilmIor";
     if (name == "thin_walled") return "(state.mat.thinWalled > 0.5)";
-    if (name == "emission") return "1.0";
-    if (name == "emission_color") return "state.mat.emission";
+    if (name == "emission") return "state.mat.emissionWeight";
+    if (name == "emission_color") return "state.mat.emissionColor";
     if (name == "opacity") return "vec3(state.mat.opacity)";
     return "";
 }
