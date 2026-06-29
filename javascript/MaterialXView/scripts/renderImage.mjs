@@ -73,6 +73,19 @@ try
     const error = await page.evaluate(() => window.renderError);
     if (error) throw new Error(error);
 
+    const cameraInfo = await page.evaluate(() => window.cameraInfo);
+    if (cameraInfo)
+    {
+        console.log('Camera:');
+        console.log(`  position : (${cameraInfo.position.x.toFixed(4)}, ${cameraInfo.position.y.toFixed(4)}, ${cameraInfo.position.z.toFixed(4)})`);
+        console.log(`  lookAt   : (${cameraInfo.lookAt.x.toFixed(4)}, ${cameraInfo.lookAt.y.toFixed(4)}, ${cameraInfo.lookAt.z.toFixed(4)})`);
+        console.log(`  fov      : ${cameraInfo.fov}`);
+        console.log(`  aspect   : ${cameraInfo.aspect.toFixed(4)}  near: ${cameraInfo.near}  far: ${cameraInfo.far}`);
+        console.log(`  aperture : ${cameraInfo.aperture ?? 'N/A'}`);
+        console.log(`  focalDist: ${cameraInfo.focalDistance}`);
+        console.log(`  focalLen : ${cameraInfo.focalLength.toFixed(2)} mm  (filmGauge: ${cameraInfo.filmGauge} mm)`);
+    }
+
     const dataUrl = await page.evaluate(() => document.getElementById('webglcanvas').toDataURL('image/png'));
     fs.writeFileSync(out, Buffer.from(dataUrl.split(',')[1], 'base64'));
     console.log(`Saved ${width}x${height} render to ${out}`);

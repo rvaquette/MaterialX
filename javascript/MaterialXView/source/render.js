@@ -83,6 +83,24 @@ async function renderToImage()
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
 
+    // Collect camera information (position, lookAt target, field of view).
+    const target = orbitControls.target;
+    window.cameraInfo = {
+        position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+        lookAt: { x: target.x, y: target.y, z: target.z },
+        fov: camera.fov,
+        aspect: camera.aspect,
+        near: camera.near,
+        far: camera.far,
+        // Photographic parameters. THREE.PerspectiveCamera exposes the focus
+        // distance and film gauge; aperture is only present if explicitly set.
+        focalDistance: camera.focus,
+        focalLength: camera.getFocalLength(),
+        filmGauge: camera.filmGauge,
+        aperture: (camera.aperture !== undefined ? camera.aperture : null)
+    };
+    console.log('Camera info:', JSON.stringify(window.cameraInfo));
+
     // Render a few frames so the environment mipmaps and uniforms are fully
     // resolved before the frame is captured.
     for (let i = 0; i < 5; i++)

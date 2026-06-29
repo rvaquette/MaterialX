@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<materialx version="1.38">
+  <surfacematerial name="robot_surface" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="robot_standard_surface" />
+  </surfacematerial>
+
+  <standard_surface name="robot_standard_surface" type="surfaceshader">
+    <input name="base" type="float" value="1.0" />
+    <input name="base_color" type="color3" value="0.7, 0.72, 0.78" />
+    <input name="metalness" type="float" value="0.1" />
+    <input name="specular_roughness" type="float" value="0.35" />
+  </standard_surface>
+</materialx>
