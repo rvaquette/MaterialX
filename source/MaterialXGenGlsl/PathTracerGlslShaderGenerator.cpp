@@ -393,7 +393,9 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("vec3 pt_Ll = vec3(dot(L, pt_T), dot(L, pt_B), dot(L, N))", stage);
     emitLine("float pdfT", stage);
     emitLine("vec3 btdf = pt_RefractBtdf(state, pt_Vl, pt_Ll, pdfT)", stage);
-    emitLine("return btdf * abs(pt_Ll.z)", stage);
+    emitComment("Weight by the standard_surface transmission layer (specTrans * (1 - metal)) so opaque materials do not transmit.", stage);
+    emitLine("float pt_wTransL = state.mat.specTrans * (1.0 - state.mat.metallic)", stage);
+    emitLine("return btdf * abs(pt_Ll.z) * pt_wTransL", stage);
     emitScopeEnd(stage);
     emitLine("g_ptV = V", stage);
     emitLine("g_ptN = N", stage);
@@ -466,7 +468,8 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("vec3 pt_Ll2 = vec3(dot(L, pt_T), dot(L, pt_B), dot(L, N))", stage);
     emitLine("float pdfT", stage);
     emitLine("vec3 btdf = pt_RefractBtdf(state, pt_Vl2, pt_Ll2, pdfT)", stage);
-    emitLine("return btdf * abs(pt_Ll2.z)", stage);
+    emitLine("float pt_wTransL = state.mat.specTrans * (1.0 - state.mat.metallic)", stage);
+    emitLine("return btdf * abs(pt_Ll2.z) * pt_wTransL", stage);
     emitScopeEnd(stage);
     emitLine("g_ptV = V", stage);
     emitLine("g_ptN = N", stage);
