@@ -5,7 +5,9 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 import { prepareEnvTexture, getLightRotation, findLights, registerLights, getUniformValues } from './helper.js'
 import { Group } from 'three';
@@ -45,6 +47,7 @@ export class Scene
         this._frame = 0;
         
         this.#_gltfLoader = new GLTFLoader();
+        this.#_objLoader = new OBJLoader();
 
         this.#_normalMat = new THREE.Matrix3();
         this.#_viewProjMat = new THREE.Matrix4();
@@ -81,7 +84,10 @@ export class Scene
         var startTime = performance.now();
         var geomLoadTime = startTime;
 
-        const gltfData = await this.loadGeometryFile(this.getGeometryURL(), this.#_gltfLoader);
+        const geometryURL = this.getGeometryURL();
+        const isObj = geometryURL.toLowerCase().endsWith('.obj');
+        const loader = isObj ? this.#_objLoader : this.#_gltfLoader;
+        const geomData = await this.loadGeometryFile(geometryURL, loader);
 
         const scene = this.getScene();
         while (scene.children.length > 0)
@@ -90,7 +96,8 @@ export class Scene
         }
 
         this.#_rootNode = null;
-        let model = gltfData.scene;
+        // OBJLoader returns a Group directly; GLTFLoader returns an object with a 'scene' property.
+        let model = isObj ? geomData : geomData.scene;
         if (!model)
         {
             const geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -102,6 +109,19 @@ export class Scene
         else
         {
             this.#_rootNode = model;
+        }
+
+        // OBJLoader produces non-indexed geometry without tangents. Index it so that
+        // tangents can be computed in updateScene(); otherwise PBR/metal materials render black.
+        if (isObj)
+        {
+            model.traverse((child) =>
+            {
+                if (child.isMesh && child.geometry && !child.geometry.getIndex())
+                {
+                    child.geometry = mergeVertices(child.geometry);
+                }
+            });
         }
         scene.add(model);
 
@@ -428,6 +448,7 @@ export class Scene
     #_geometryURL = '';
     // Geometry loader
     #_gltfLoader = null;
+    #_objLoader = null;
     // Flip V coordinate of texture coordinates.
     // Set to true to be consistent with desktop viewer.
     #_flipV = true;

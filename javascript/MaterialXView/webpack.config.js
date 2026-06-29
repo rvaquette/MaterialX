@@ -33,9 +33,12 @@ let geometry = dirent
     .map((fileName) => ({ name: fileName, value: `${geometryFilesURL}/${fileName}` }));
 
 module.exports = {
-    entry: './source/index.js',
+    entry: {
+        main: './source/index.js',
+        render: './source/render.js'
+    },
     output: {
-        filename: 'main.js',
+        filename: '[name].js',
         path: path.resolve(__dirname, 'dist')
     },
     mode: "development",
@@ -55,7 +58,13 @@ module.exports = {
                 materials,
                 geometry
             },
+            chunks: ['main'],
             template: 'index.ejs'
+        }),
+        new HtmlWebpackPlugin({
+            filename: 'render.html',
+            chunks: ['render'],
+            template: 'render.ejs'
         }),
         new CopyPlugin({
             patterns: [
@@ -67,6 +76,11 @@ module.exports = {
                 {
                     context: "../../resources/Geometry/",
                     from: "*.glb",
+                    to: "Geometry",
+                },
+                {
+                    context: "../../resources/Geometry/",
+                    from: "*.obj",
                     to: "Geometry",
                 },
                 { from: "./public", to: 'public' },
