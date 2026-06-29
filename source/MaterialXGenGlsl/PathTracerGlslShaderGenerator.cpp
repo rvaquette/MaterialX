@@ -169,9 +169,9 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     // bricks. The path tracer integrator owns lighting, so the indirect
     // (environment) closure branches are stubbed to zero rather than sampling an
     // IBL; only the direct reflection/transmission responses are used.
-    emitLine("#define DIRECTIONAL_ALBEDO_METHOD 0", stage, false);
+    emitLine("#define DIRECTIONAL_ALBEDO_METHOD " + std::to_string(int(context.getOptions().hwDirectionalAlbedoMethod)), stage, false);
     emitLineBreak(stage);
-    emitLine("#define AIRY_FRESNEL_ITERATIONS 0", stage, false);
+    emitLine("#define AIRY_FRESNEL_ITERATIONS " + std::to_string(context.getOptions().hwAiryFresnelIterations), stage, false);
     emitLineBreak(stage);
     emitLibraryInclude("pbrlib/genglsl/lib/mx_environment_none.glsl", context, stage);
     emitLibraryInclude("pbrlib/genglsl/lib/mx_transmission_opacity.glsl", context, stage);
