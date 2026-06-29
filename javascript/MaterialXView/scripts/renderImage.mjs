@@ -89,6 +89,24 @@ try
     const dataUrl = await page.evaluate(() => document.getElementById('webglcanvas').toDataURL('image/png'));
     fs.writeFileSync(out, Buffer.from(dataUrl.split(',')[1], 'base64'));
     console.log(`Saved ${width}x${height} render to ${out}`);
+
+    // Export the generated GLSL surface shaders next to the output image.
+    const glslSources = await page.evaluate(() => window.glslSources || []);
+    const outDir = path.dirname(out);
+    const outBase = path.basename(out, path.extname(out));
+    for (const shader of glslSources)
+    {
+        const safeName = shader.name.replace(/[^A-Za-z0-9_.-]/g, '_');
+        const vertPath = path.join(outDir, `${outBase}.${safeName}.vert.glsl`);
+        const fragPath = path.join(outDir, `${outBase}.${safeName}.frag.glsl`);
+        fs.writeFileSync(vertPath, shader.vertex);
+        fs.writeFileSync(fragPath, shader.fragment);
+        console.log(`Exported GLSL for '${shader.name}': ${vertPath}, ${fragPath}`);
+    }
+    if (glslSources.length === 0)
+    {
+        console.log('No GLSL surface shaders were generated.');
+    }
 }
 finally
 {

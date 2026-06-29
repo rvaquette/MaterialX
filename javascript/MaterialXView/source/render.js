@@ -101,6 +101,30 @@ async function renderToImage()
     };
     console.log('Camera info:', JSON.stringify(window.cameraInfo));
 
+    // Collect the generated GLSL source code from the assigned surface shaders.
+    // The viewer builds a THREE.RawShaderMaterial whose vertexShader/fragmentShader
+    // hold the MaterialX-generated GLSL for each renderable mesh.
+    const glslSources = [];
+    const seen = new Set();
+    scene.getScene().traverse((child) =>
+    {
+        if (child.isMesh && child.material && child.material.fragmentShader)
+        {
+            const name = child.material.name || child.name || `shader_${glslSources.length}`;
+            if (!seen.has(name))
+            {
+                seen.add(name);
+                glslSources.push({
+                    name,
+                    vertex: child.material.vertexShader,
+                    fragment: child.material.fragmentShader
+                });
+            }
+        }
+    });
+    window.glslSources = glslSources;
+    console.log(`Generated GLSL shaders: ${glslSources.map(s => s.name).join(', ') || 'none'}`);
+
     // Render a few frames so the environment mipmaps and uniforms are fully
     // resolved before the frame is captured.
     for (let i = 0; i < 5; i++)
