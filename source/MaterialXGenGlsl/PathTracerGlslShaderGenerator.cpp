@@ -90,7 +90,15 @@ string pathTracerMatBindingForInput(const string& name)
     if (name == "thin_film_thickness") return "state.mat.thinFilmThickness";
     if (name == "thin_film_IOR") return "state.mat.thinFilmIor";
     if (name == "thin_walled") return "(state.mat.thinWalled > 0.5)";
-    if (name == "emission") return "state.mat.emissionWeight";
+    // T014: emission is owned by the path tracer integrator, which adds
+    // `state.mat.emission` (folded color * weight) as radiance once per hit
+    // (pathtrace.glsl: `radiance += state.mat.emission * throughput`). The
+    // closure must therefore NOT fold the emission EDF into its BSDF response,
+    // or emission would be double-counted and wrongly mixed into throughput /
+    // direct-lighting MIS. Binding the emission weight to 0 zeroes the generated
+    // EDF (emission_weight_out = emission_color * 0) while leaving the scattering
+    // closures untouched.
+    if (name == "emission") return "0.0";
     if (name == "emission_color") return "state.mat.emissionColor";
     if (name == "opacity") return "vec3(state.mat.opacity)";
     return "";
@@ -310,7 +318,10 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("if (Ll.z >= 0.0) return vec3(0.0)", stage);
     emitLine("float etaEff = (state.mat.thinWalled > 0.5) ? 1.0 : state.eta", stage);
     emitLine("float aT = pt_RefractAlpha(state)", stage);
-    emitLine("vec3 H = normalize(Vl + Ll * etaEff)", stage);
+    emitLine("vec3 pt_Hraw = Vl + Ll * etaEff", stage);
+    emitComment("Degenerate half-vector (etaEff ~ 1, i.e. thin-walled straight transmission): no microfacet BTDF.", stage);
+    emitLine("if (dot(pt_Hraw, pt_Hraw) < 1e-6) return vec3(0.0)", stage);
+    emitLine("vec3 H = normalize(pt_Hraw)", stage);
     emitLine("if (H.z < 0.0) H = -H", stage);
     emitLine("float LDotH = dot(Ll, H)", stage);
     emitLine("float VDotH = dot(Vl, H)", stage);
