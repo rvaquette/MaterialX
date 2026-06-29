@@ -173,8 +173,18 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLineBreak(stage);
     emitLine("#define AIRY_FRESNEL_ITERATIONS " + std::to_string(context.getOptions().hwAiryFresnelIterations), stage, false);
     emitLineBreak(stage);
-    emitLibraryInclude("pbrlib/genglsl/lib/mx_environment_none.glsl", context, stage);
-    emitLibraryInclude("pbrlib/genglsl/lib/mx_transmission_opacity.glsl", context, stage);
+    // Import the specular environment library selected by the configured method
+    // (hwSpecularEnvironmentMethod: FIS / prefilter / none) instead of hardcoding
+    // a single file, so the generated closure uses the correct mx_environment_*.glsl.
+    // emitSpecularEnvironment also defines mx_environment_radiance, required by the
+    // transmission render include below.
+    emitSpecularEnvironment(context, stage);
+    // Honor the configured transmission render method (default: refraction) by
+    // delegating to the base generator's emitTransmissionRender instead of
+    // hardcoding the opacity stub, so mx_surface_transmission matches the
+    // MaterialX reference. u_refractionTwoSided is already declared from the
+    // private uniform blocks emitted above.
+    emitTransmissionRender(context, stage);
     emitLineBreak(stage);
 
     // --- Path tracer geometry / sampling globals ------------------------------
@@ -270,6 +280,86 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitFunctionBodyEnd(graph, context, stage);
     emitLineBreak(stage);
 
+    // --- Importance sampling (T012/T013/T015) ---------------------------------
+    // One-sample mixture of three lobes shared by Eval/Sample:
+    //   - GGX specular reflection (VNDF), response from the genglsl assembly;
+    //   - cosine diffuse, response from the genglsl assembly;
+    //   - rough dielectric transmission (T013), response synthesized below
+    //     (the genglsl standard_surface transmission is an environment-map
+    //     approximation, NOT a path-traceable BTDF, so we evaluate the
+    //     microfacet refraction BTDF directly, matching the path tracer's
+    //     EvalMicrofacetRefraction). Lobe probabilities derive from the view
+    //     Fresnel (pt_Fv) and the transmission weight (specTrans * (1 - metal)).
+    // Reuses path tracer helpers (SmithG/GTR2/Onb/SampleGGXVNDF/
+    // CosineSampleHemisphere/DielectricFresnel) included before the injection.
+
+    // Transmission roughness -> GGX alpha (adds transmission_extra_roughness).
+    emitLine("float pt_RefractAlpha(State state)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("float r = clamp(state.mat.roughness + state.mat.transmissionExtraRoughness, 0.001, 1.0)", stage);
+    emitLine("return max(r * r, 1e-4)", stage);
+    emitScopeEnd(stage);
+    emitLineBreak(stage);
+
+    // Rough dielectric refraction BTDF in the local frame (Ll.z < 0 = transmit).
+    // Mirrors EvalMicrofacetRefraction (disney.glsl): returns the BTDF value
+    // (without the cosine) and the transmission-lobe pdf in pdfT.
+    emitLine("vec3 pt_RefractBtdf(State state, vec3 Vl, vec3 Ll, out float pdfT)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("pdfT = 0.0", stage);
+    emitLine("if (Ll.z >= 0.0) return vec3(0.0)", stage);
+    emitLine("float etaEff = (state.mat.thinWalled > 0.5) ? 1.0 : state.eta", stage);
+    emitLine("float aT = pt_RefractAlpha(state)", stage);
+    emitLine("vec3 H = normalize(Vl + Ll * etaEff)", stage);
+    emitLine("if (H.z < 0.0) H = -H", stage);
+    emitLine("float LDotH = dot(Ll, H)", stage);
+    emitLine("float VDotH = dot(Vl, H)", stage);
+    emitLine("float D = GTR2(H.z, aT)", stage);
+    emitLine("float G1 = SmithG(abs(Vl.z), aT)", stage);
+    emitLine("float G2 = G1 * SmithG(abs(Ll.z), aT)", stage);
+    emitLine("float denom = LDotH + VDotH * etaEff", stage);
+    emitLine("denom *= denom", stage);
+    emitLine("float jacobian = abs(LDotH) / max(denom, 1e-7)", stage);
+    emitLine("float F = DielectricFresnel(abs(VDotH), etaEff)", stage);
+    emitLine("pdfT = G1 * max(0.0, VDotH) * D * jacobian / max(abs(Vl.z), 1e-4)", stage);
+    emitLine("vec3 tint = max(state.mat.transmissionColor, vec3(0.0))", stage);
+    emitLine("return tint * (1.0 - F) * D * G2 * abs(VDotH) * jacobian * (etaEff * etaEff) / max(abs(Ll.z * Vl.z), 1e-5)", stage);
+    emitScopeEnd(stage);
+    emitLineBreak(stage);
+
+    // Mixture pdf shared by Eval/Sample (reflection lobes + transmission lobe).
+    emitLine("float pt_ClosurePdf(State state, vec3 V, vec3 N, vec3 L)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("vec3 pt_T", stage);
+    emitLine("vec3 pt_B", stage);
+    emitLine("Onb(N, pt_T, pt_B)", stage);
+    emitLine("vec3 pt_Vl = vec3(dot(V, pt_T), dot(V, pt_B), dot(V, N))", stage);
+    emitLine("vec3 pt_Ll = vec3(dot(L, pt_T), dot(L, pt_B), dot(L, N))", stage);
+    emitLine("float pt_NDotV = max(pt_Vl.z, 1e-4)", stage);
+    emitLine("float pt_metal = state.mat.metallic", stage);
+    emitLine("float pt_wTrans = state.mat.specTrans * (1.0 - pt_metal)", stage);
+    emitLine("vec3 pt_F0 = mix(vec3(0.04) * max(state.mat.specularColor, vec3(0.0)) * state.mat.specularWeight, state.mat.baseColor, pt_metal)", stage);
+    emitLine("float pt_F0lum = max(pt_F0.x, max(pt_F0.y, pt_F0.z))", stage);
+    emitLine("float pt_Fv = pt_F0lum + (1.0 - pt_F0lum) * pow(1.0 - pt_NDotV, 5.0)", stage);
+    emitLine("float pt_diffLum = (1.0 - pt_metal) * (1.0 - state.mat.specTrans) * dot(state.mat.baseColor, vec3(0.2126, 0.7152, 0.0722))", stage);
+    emitLine("float pt_pTrans = clamp(pt_wTrans * (1.0 - pt_Fv), 0.0, 0.9)", stage);
+    emitLine("float pt_pSpec = clamp(pt_Fv / (pt_Fv + (1.0 - pt_Fv) * pt_diffLum + 1e-3), 0.1, 0.9)", stage);
+    emitLine("if (pt_Ll.z < 0.0)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("float pdfT", stage);
+    emitLine("pt_RefractBtdf(state, pt_Vl, pt_Ll, pdfT)", stage);
+    emitLine("return max(pt_pTrans * pdfT, 1e-6)", stage);
+    emitScopeEnd(stage);
+    emitLine("float pt_rough = clamp(state.mat.roughness, 0.001, 1.0)", stage);
+    emitLine("float pt_a = max(pt_rough * pt_rough, 1e-4)", stage);
+    emitLine("vec3 pt_H = normalize(pt_Vl + pt_Ll)", stage);
+    emitLine("float pt_NDotH = clamp(pt_H.z, 0.0, 1.0)", stage);
+    emitLine("float pt_specPdf = SmithG(pt_NDotV, pt_a) * GTR2(pt_NDotH, pt_a) / (4.0 * pt_NDotV)", stage);
+    emitLine("float pt_diffPdf = max(pt_Ll.z, 1e-4) * INV_PI", stage);
+    emitLine("return max((1.0 - pt_pTrans) * (pt_pSpec * pt_specPdf + (1.0 - pt_pSpec) * pt_diffPdf), 1e-6)", stage);
+    emitScopeEnd(stage);
+    emitLineBreak(stage);
+
     // --- Path tracer closure entry points -------------------------------------
     // Contract (shaders/common/mtlx_pure_closure.glsl):
     //   vec3 EvalMtlxPureClosure(int matID, State state, vec3 V, vec3 N, vec3 L, out float pdf, out int flags);
@@ -281,34 +371,19 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitScopeBegin(stage);
     emitLine("bool isReflect = dot(N, L) >= 0.0", stage);
     emitLine("flags = isReflect ? CLOSURE_FLAG_REFLECT : CLOSURE_FLAG_TRANSMIT", stage);
-    emitLine("g_ptV = V", stage);
-    emitLine("g_ptN = N", stage);
-    emitLine("g_ptL = L", stage);
-    emitLine("g_ptP = state.fhp", stage);
-    emitLine("g_ptTangent = state.tangent", stage);
-    emitLine("g_ptBitangent = state.bitangent", stage);
-    emitLine("g_ptTexcoord = state.texCoord", stage);
-    emitLine("g_ptClosureType = isReflect ? CLOSURE_TYPE_REFLECTION : CLOSURE_TYPE_TRANSMISSION", stage);
-    emitLine("surfaceshader pt_surf = mtlxEvalSurface(state)", stage);
-    emitComment("TODO(T012-T014): per-closure importance-sampling pdf; cosine pdf placeholder.", stage);
-    emitLine("pdf = max(dot(N, L), 0.0) * M_PI_INV", stage);
-    emitLine("return pt_surf.color", stage);
-    emitScopeEnd(stage);
-    emitLineBreak(stage);
-
-    emitLine("vec3 SampleMtlxPureClosure(int matID, State state, vec3 V, vec3 N, out vec3 L, out float pdf, out int flags)", stage, false);
+    emitLine("pdf = pt_ClosurePdf(state, V, N, L)", stage);
+    emitComment("Transmission (T013): synthesized microfacet refraction BTDF (genglsl transmission is env-based, not path-traceable).", stage);
+    emitLine("if (!isReflect)", stage, false);
     emitScopeBegin(stage);
-    emitComment("TODO(T012-T014): per-closure importance sampling; cosine-weighted hemisphere placeholder.", stage);
-    emitLine("vec3 pt_t = abs(N.x) > 0.5 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)", stage);
-    emitLine("vec3 pt_b = normalize(cross(N, pt_t))", stage);
-    emitLine("pt_t = cross(pt_b, N)", stage);
-    emitLine("float pt_r1 = rand()", stage);
-    emitLine("float pt_r2 = rand()", stage);
-    emitLine("float pt_phi = 2.0 * M_PI * pt_r1", stage);
-    emitLine("float pt_st = sqrt(pt_r2)", stage);
-    emitLine("float pt_ct = sqrt(max(0.0, 1.0 - pt_r2))", stage);
-    emitLine("L = normalize(pt_t * (cos(pt_phi) * pt_st) + pt_b * (sin(pt_phi) * pt_st) + N * pt_ct)", stage);
-    emitLine("flags = CLOSURE_FLAG_REFLECT", stage);
+    emitLine("vec3 pt_T", stage);
+    emitLine("vec3 pt_B", stage);
+    emitLine("Onb(N, pt_T, pt_B)", stage);
+    emitLine("vec3 pt_Vl = vec3(dot(V, pt_T), dot(V, pt_B), dot(V, N))", stage);
+    emitLine("vec3 pt_Ll = vec3(dot(L, pt_T), dot(L, pt_B), dot(L, N))", stage);
+    emitLine("float pdfT", stage);
+    emitLine("vec3 btdf = pt_RefractBtdf(state, pt_Vl, pt_Ll, pdfT)", stage);
+    emitLine("return btdf * abs(pt_Ll.z)", stage);
+    emitScopeEnd(stage);
     emitLine("g_ptV = V", stage);
     emitLine("g_ptN = N", stage);
     emitLine("g_ptL = L", stage);
@@ -318,7 +393,79 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("g_ptTexcoord = state.texCoord", stage);
     emitLine("g_ptClosureType = CLOSURE_TYPE_REFLECTION", stage);
     emitLine("surfaceshader pt_surf = mtlxEvalSurface(state)", stage);
-    emitLine("pdf = max(dot(N, L), 0.0) * M_PI_INV", stage);
+    emitLine("return pt_surf.color", stage);
+    emitScopeEnd(stage);
+    emitLineBreak(stage);
+
+    emitLine("vec3 SampleMtlxPureClosure(int matID, State state, vec3 V, vec3 N, out vec3 L, out float pdf, out int flags)", stage, false);
+    emitScopeBegin(stage);
+    emitComment("T012/T013/T015: one-sample mixture (GGX specular reflection + cosine diffuse + rough dielectric transmission).", stage);
+    emitLine("vec3 pt_T", stage);
+    emitLine("vec3 pt_B", stage);
+    emitLine("Onb(N, pt_T, pt_B)", stage);
+    emitLine("vec3 pt_Vl = vec3(dot(V, pt_T), dot(V, pt_B), dot(V, N))", stage);
+    emitLine("if (pt_Vl.z < 0.0) pt_Vl = -pt_Vl", stage);
+    emitLine("float pt_NDotV = max(pt_Vl.z, 1e-4)", stage);
+    emitLine("float pt_metal = state.mat.metallic", stage);
+    emitLine("float pt_wTrans = state.mat.specTrans * (1.0 - pt_metal)", stage);
+    emitLine("vec3 pt_F0 = mix(vec3(0.04) * max(state.mat.specularColor, vec3(0.0)) * state.mat.specularWeight, state.mat.baseColor, pt_metal)", stage);
+    emitLine("float pt_F0lum = max(pt_F0.x, max(pt_F0.y, pt_F0.z))", stage);
+    emitLine("float pt_Fv = pt_F0lum + (1.0 - pt_F0lum) * pow(1.0 - pt_NDotV, 5.0)", stage);
+    emitLine("float pt_diffLum = (1.0 - pt_metal) * (1.0 - state.mat.specTrans) * dot(state.mat.baseColor, vec3(0.2126, 0.7152, 0.0722))", stage);
+    emitLine("float pt_pTrans = clamp(pt_wTrans * (1.0 - pt_Fv), 0.0, 0.9)", stage);
+    emitLine("float pt_pSpec = clamp(pt_Fv / (pt_Fv + (1.0 - pt_Fv) * pt_diffLum + 1e-3), 0.1, 0.9)", stage);
+    emitLine("float pt_rough = clamp(state.mat.roughness, 0.001, 1.0)", stage);
+    emitLine("float pt_a = max(pt_rough * pt_rough, 1e-4)", stage);
+    emitLine("float pt_r1 = rand()", stage);
+    emitLine("float pt_r2 = rand()", stage);
+    emitLine("float pt_sel = rand()", stage);
+    emitLine("vec3 pt_Ll", stage);
+    emitLine("if (pt_sel < pt_pTrans)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("float aT = pt_RefractAlpha(state)", stage);
+    emitLine("vec3 pt_Hl = SampleGGXVNDF(pt_Vl, aT, aT, pt_r1, pt_r2)", stage);
+    emitLine("if (pt_Hl.z < 0.0) pt_Hl = -pt_Hl", stage);
+    emitLine("float etaEff = (state.mat.thinWalled > 0.5) ? 1.0 : state.eta", stage);
+    emitLine("pt_Ll = refract(-pt_Vl, pt_Hl, etaEff)", stage);
+    emitLine("if (dot(pt_Ll, pt_Ll) < 1e-8) pt_Ll = reflect(-pt_Vl, pt_Hl)", stage);
+    emitLine("pt_Ll = normalize(pt_Ll)", stage);
+    emitScopeEnd(stage);
+    emitLine("else if (pt_sel < pt_pTrans + (1.0 - pt_pTrans) * pt_pSpec)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("vec3 pt_Hl = SampleGGXVNDF(pt_Vl, pt_a, pt_a, pt_r1, pt_r2)", stage);
+    emitLine("if (pt_Hl.z < 0.0) pt_Hl = -pt_Hl", stage);
+    emitLine("pt_Ll = reflect(-pt_Vl, pt_Hl)", stage);
+    emitScopeEnd(stage);
+    emitLine("else", stage, false);
+    emitScopeBegin(stage);
+    emitLine("pt_Ll = CosineSampleHemisphere(pt_r1, pt_r2)", stage);
+    emitScopeEnd(stage);
+    emitLine("L = normalize(pt_T * pt_Ll.x + pt_B * pt_Ll.y + N * pt_Ll.z)", stage);
+    emitLine("bool isReflect = dot(N, L) >= 0.0", stage);
+    emitLine("flags = isReflect ? CLOSURE_FLAG_REFLECT : CLOSURE_FLAG_TRANSMIT", stage);
+    emitLine("pdf = pt_ClosurePdf(state, V, N, L)", stage);
+    emitLine("if (pdf <= 0.0)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("pdf = 0.0", stage);
+    emitLine("return vec3(0.0)", stage);
+    emitScopeEnd(stage);
+    emitLine("if (!isReflect)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("vec3 pt_Vl2 = vec3(dot(V, pt_T), dot(V, pt_B), dot(V, N))", stage);
+    emitLine("vec3 pt_Ll2 = vec3(dot(L, pt_T), dot(L, pt_B), dot(L, N))", stage);
+    emitLine("float pdfT", stage);
+    emitLine("vec3 btdf = pt_RefractBtdf(state, pt_Vl2, pt_Ll2, pdfT)", stage);
+    emitLine("return btdf * abs(pt_Ll2.z)", stage);
+    emitScopeEnd(stage);
+    emitLine("g_ptV = V", stage);
+    emitLine("g_ptN = N", stage);
+    emitLine("g_ptL = L", stage);
+    emitLine("g_ptP = state.fhp", stage);
+    emitLine("g_ptTangent = state.tangent", stage);
+    emitLine("g_ptBitangent = state.bitangent", stage);
+    emitLine("g_ptTexcoord = state.texCoord", stage);
+    emitLine("g_ptClosureType = CLOSURE_TYPE_REFLECTION", stage);
+    emitLine("surfaceshader pt_surf = mtlxEvalSurface(state)", stage);
     emitLine("return pt_surf.color", stage);
     emitScopeEnd(stage);
     emitLineBreak(stage);
