@@ -10,7 +10,7 @@
 /// Path tracer GLSL shader generator.
 ///
 /// Emits GLSL conforming to the Monte Carlo path tracer closure contract
-/// (EvalMtlxPureClosure / SampleMtlxPureClosure) instead of the forward-shading
+/// (EvalMtlxClosure / SampleMtlxClosure) instead of the forward-shading
 /// rasterization contract. See specs/001-mtlx-pathtracer-glslgen.
 
 #include <MaterialXGenGlsl/EsslShaderGenerator.h>
@@ -62,8 +62,8 @@ class MX_GENGLSL_API PathTracerGlslShaderGenerator : public EsslShaderGenerator
   protected:
     /// Emit the path tracer closure stage in place of the forward-shading pixel
     /// stage. Instead of vertex/pixel rasterization with an explicit light loop,
-    /// this emits the closure entry points (EvalMtlxPureClosure /
-    /// SampleMtlxPureClosure) consumed by the Monte Carlo integrator, reusing the
+    /// this emits the closure entry points (EvalMtlxClosure /
+    /// SampleMtlxClosure) consumed by the Monte Carlo integrator, reusing the
     /// upstream "genglsl" node function definitions for the BSDF/EDF bricks.
     void emitPixelStage(const ShaderGraph& graph, GenContext& context, ShaderStage& stage) const override;
 
@@ -75,13 +75,6 @@ class MX_GENGLSL_API PathTracerGlslShaderGenerator : public EsslShaderGenerator
     /// whose message names the offending node/closure and the reason. The
     /// JavaScript bindings surface this as a JS exception.
     [[noreturn]] void throwUnsupportedClosure(const string& nodeName, const string& reason) const;
-
-    /// Emit a texture-map override for a standard_surface input that the path
-    /// tracer can texture, sampling the texture array (textureMapsArrayTex) at
-    /// the per-material layer (State.mat.*TexID), guarded so untextured materials
-    /// are unchanged. Color inputs are linearized from sRGB; data inputs stay
-    /// linear (FR-012/FR-014). No-op for inputs without a texture slot.
-    void emitPathTracerTextureOverride(const string& inputName, const string& inputVar, ShaderStage& stage) const;
 };
 
 MATERIALX_NAMESPACE_END

@@ -20,7 +20,7 @@ MATERIALX_NAMESPACE_BEGIN
 /// closure evaluation driven by path-tracer globals (g_ptV/g_ptN/g_ptL/g_ptP and
 /// g_ptClosureType). The node assembles the upstream BSDF/EDF bricks once and
 /// writes the resulting response into the surfaceshader output's color, so the
-/// generator's EvalMtlxPureClosure / SampleMtlxPureClosure entry points can read
+/// generator's EvalMtlxClosure / SampleMtlxClosure entry points can read
 /// the BSDF value for one (V, N, L) direction.
 class MX_GENGLSL_API PathTracerSurfaceNode : public HwSurfaceNode
 {
