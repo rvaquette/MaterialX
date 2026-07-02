@@ -139,20 +139,11 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitTransmissionRender(context, stage);
     emitLineBreak(stage);
 
-    // Shared MaterialX library (mx_* bricks + the standard_surface graph function,
-    // which takes its parameters as arguments). This block is identical across
-    // materials; the multi-material assembler (sceneLoader) emits it once and the
-    // per-material code below is suffixed per matID.
-    emitFunctionDefinitions(graph, context, stage);
-    emitLineBreak(stage);
-    emitComment("__MTLX_SHARED_END__", stage);
-    emitLineBreak(stage);
-
     // --- Path tracer geometry / sampling globals ------------------------------
     // The upstream geometric nodes expect vertex-data variables (normalWorld,
     // tangentWorld, ...). Instead of declaring them as 'in' (no vertex stage in a
     // path tracer), emit them as mutable globals bound from State inside
-    // __mtlxEvalSurface, alongside the closure-direction globals.
+    // mtlxEvalSurface, alongside the closure-direction globals.
     emitComment("Path tracer closure globals (set by the closure entry points).", stage);
     emitLine("vec3 g_ptV", stage);
     emitLine("vec3 g_ptN", stage);
@@ -170,21 +161,22 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     }
     emitLineBreak(stage);
 
-    // standard_surface parameter interface, emitted as mutable globals with their
-    // authored/default values from the .mtlx document. These values are used
-    // directly by the generated closure and sampling helpers; they are NOT read
-    // from State.mat (materialsTex) anymore.
+    // standard_surface parameter globals with their authored/default .mtlx values.
+    // Wrapped in markers so the multi-material assembler (sceneLoader) can turn the
+    // per-material initializers into a single pt_LoadParams(matID) switch; the GLSL
+    // structure is otherwise identical across standard_surface materials.
     const VariableBlock& publicUniforms = stage.getUniformBlock(HW::PUBLIC_UNIFORMS);
+    emitComment("__MTLX_PARAMS_BEGIN__", stage);
     if (!publicUniforms.empty())
     {
-        emitComment("standard_surface parameters (authored .mtlx values, used directly).", stage);
         emitVariableDeclarations(publicUniforms, EMPTY_STRING, Syntax::SEMICOLON, context, stage, true);
-        emitLineBreak(stage);
     }
+    emitComment("__MTLX_PARAMS_END__", stage);
+    emitLineBreak(stage);
 
-    // Lookup: standard_surface input name -> emitted global variable name. Used to
-    // build the lobe-selection material summary below so the importance-sampling
-    // helpers reference the authored .mtlx parameter globals instead of State.mat.
+    // Lookup: standard_surface input name -> emitted global variable name, used by
+    // pt_InitMaterialSummary() to derive the lobe-selection summary from the
+    // authored parameter globals.
     StringMap paramVar;
     for (size_t i = 0; i < publicUniforms.size(); ++i)
     {
@@ -197,43 +189,41 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
         return it != paramVar.end() ? it->second : fallback;
     };
 
-    // Lobe-selection material summary, derived from the authored .mtlx parameter
-    // globals above. The importance-sampling helpers use these instead of reading
-    // the material texture. base_color is pre-multiplied by base to match the
-    // engine's folded base color convention.
-    emitComment("Lobe-selection material summary (authored .mtlx params).", stage);
-    emitLine("float pt_mMetal = " + pv("metalness", "0.0"), stage);
-    emitLine("float pt_mSpecTrans = " + pv("transmission", "0.0"), stage);
-    emitLine("vec3 pt_mBaseColor = (" + pv("base_color", "vec3(0.8)") + ") * (" + pv("base", "1.0") + ")", stage);
-    emitLine("vec3 pt_mSpecColor = " + pv("specular_color", "vec3(1.0)"), stage);
-    emitLine("float pt_mSpecWeight = " + pv("specular", "1.0"), stage);
-    emitLine("float pt_mRough = " + pv("specular_roughness", "0.2"), stage);
-    emitLine("float pt_mTransExtraRough = " + pv("transmission_extra_roughness", "0.0"), stage);
-    emitLine("vec3 pt_mTransColor = " + pv("transmission_color", "vec3(1.0)"), stage);
-    emitLine("bool pt_mThinWalled = " + pv("thin_walled", "false"), stage);
+    // Lobe-selection material summary globals (constant initializers as required by
+    // GLSL ES; the real values are assigned by pt_InitMaterialSummary() below,
+    // after the parameter globals are loaded for the current matID).
+    emitComment("Lobe-selection material summary (assigned by pt_InitMaterialSummary).", stage);
+    emitLine("float pt_mMetal = 0.0", stage);
+    emitLine("float pt_mSpecTrans = 0.0", stage);
+    emitLine("vec3 pt_mBaseColor = vec3(0.0)", stage);
+    emitLine("vec3 pt_mSpecColor = vec3(0.0)", stage);
+    emitLine("float pt_mSpecWeight = 0.0", stage);
+    emitLine("float pt_mRough = 0.0", stage);
+    emitLine("float pt_mTransExtraRough = 0.0", stage);
+    emitLine("vec3 pt_mTransColor = vec3(0.0)", stage);
+    emitLine("bool pt_mThinWalled = false", stage);
     emitLineBreak(stage);
 
-    // Material-specific symbols the multi-material assembler (sceneLoader) suffixes
-    // per matID so several materials can be concatenated without name collisions.
-    // The shared library above (mx_*/NG_* + structs) keeps stable names.
-    {
-        StringVec ptSymbols = {
-            "g_ptV", "g_ptN", "g_ptL", "g_ptP", "g_ptTangent", "g_ptBitangent",
-            "g_ptTexcoord", "g_ptClosureType",
-            "pt_mMetal", "pt_mSpecTrans", "pt_mBaseColor", "pt_mSpecColor",
-            "pt_mSpecWeight", "pt_mRough", "pt_mTransExtraRough", "pt_mTransColor",
-            "pt_mThinWalled", "pt_RefractAlpha", "pt_RefractBtdf", "pt_ClosurePdf",
-            "mtlxEvalSurface", "EvalMtlxClosure", "SampleMtlxClosure"
-        };
-        for (size_t i = 0; i < vertexData.size(); ++i)
-            ptSymbols.push_back(vertexData[i]->getVariable());
-        for (size_t i = 0; i < publicUniforms.size(); ++i)
-            ptSymbols.push_back(publicUniforms[i]->getVariable());
-        string symLine = "__MTLX_SYMBOLS__";
-        for (const string& s : ptSymbols) symLine += " " + s;
-        emitComment(symLine, stage);
-        emitLineBreak(stage);
-    }
+    // MaterialX node function definitions (mx_* bricks + the standard_surface
+    // surface assembly, which references the g_pt* globals declared above).
+    emitFunctionDefinitions(graph, context, stage);
+    emitLineBreak(stage);
+
+    // Assign the lobe-selection summary from the authored parameter globals. Called
+    // by the closure entry points after pt_LoadParams(matID) has set the params.
+    emitLine("void pt_InitMaterialSummary()", stage, false);
+    emitScopeBegin(stage);
+    emitLine("pt_mMetal = " + pv("metalness", "0.0"), stage);
+    emitLine("pt_mSpecTrans = " + pv("transmission", "0.0"), stage);
+    emitLine("pt_mBaseColor = (" + pv("base_color", "vec3(0.8)") + ") * (" + pv("base", "1.0") + ")", stage);
+    emitLine("pt_mSpecColor = " + pv("specular_color", "vec3(1.0)"), stage);
+    emitLine("pt_mSpecWeight = " + pv("specular", "1.0"), stage);
+    emitLine("pt_mRough = " + pv("specular_roughness", "0.2"), stage);
+    emitLine("pt_mTransExtraRough = " + pv("transmission_extra_roughness", "0.0"), stage);
+    emitLine("pt_mTransColor = " + pv("transmission_color", "vec3(1.0)"), stage);
+    emitLine("pt_mThinWalled = " + pv("thin_walled", "false"), stage);
+    emitScopeEnd(stage);
+    emitLineBreak(stage);
 
     // --- Surface evaluation helper --------------------------------------------
     // Assembles the closure once for the current globals and returns the
@@ -368,6 +358,7 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
 
     emitLine("vec3 EvalMtlxClosure(int matID, State state, vec3 V, vec3 N, vec3 L, out float pdf, out int flags)", stage, false);
     emitScopeBegin(stage);
+    emitLine("pt_InitMaterialSummary()", stage);
     emitLine("bool isReflect = dot(N, L) >= 0.0", stage);
     emitLine("flags = isReflect ? CLOSURE_FLAG_REFLECT : CLOSURE_FLAG_TRANSMIT", stage);
     emitLine("pdf = pt_ClosurePdf(state, V, N, L)", stage);
@@ -400,6 +391,7 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
 
     emitLine("vec3 SampleMtlxClosure(int matID, State state, vec3 V, vec3 N, out vec3 L, out float pdf, out int flags)", stage, false);
     emitScopeBegin(stage);
+    emitLine("pt_InitMaterialSummary()", stage);
     emitComment("T012/T013/T015: one-sample mixture (GGX specular reflection + cosine diffuse + rough dielectric transmission).", stage);
     emitLine("vec3 pt_T", stage);
     emitLine("vec3 pt_B", stage);
