@@ -139,6 +139,15 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitTransmissionRender(context, stage);
     emitLineBreak(stage);
 
+    // Shared MaterialX library (mx_* bricks + the standard_surface graph function,
+    // which takes its parameters as arguments). This block is identical across
+    // materials; the multi-material assembler (sceneLoader) emits it once and the
+    // per-material code below is suffixed per matID.
+    emitFunctionDefinitions(graph, context, stage);
+    emitLineBreak(stage);
+    emitComment("__MTLX_SHARED_END__", stage);
+    emitLineBreak(stage);
+
     // --- Path tracer geometry / sampling globals ------------------------------
     // The upstream geometric nodes expect vertex-data variables (normalWorld,
     // tangentWorld, ...). Instead of declaring them as 'in' (no vertex stage in a
@@ -204,8 +213,27 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("bool pt_mThinWalled = " + pv("thin_walled", "false"), stage);
     emitLineBreak(stage);
 
-    emitFunctionDefinitions(graph, context, stage);
-    emitLineBreak(stage);
+    // Material-specific symbols the multi-material assembler (sceneLoader) suffixes
+    // per matID so several materials can be concatenated without name collisions.
+    // The shared library above (mx_*/NG_* + structs) keeps stable names.
+    {
+        StringVec ptSymbols = {
+            "g_ptV", "g_ptN", "g_ptL", "g_ptP", "g_ptTangent", "g_ptBitangent",
+            "g_ptTexcoord", "g_ptClosureType",
+            "pt_mMetal", "pt_mSpecTrans", "pt_mBaseColor", "pt_mSpecColor",
+            "pt_mSpecWeight", "pt_mRough", "pt_mTransExtraRough", "pt_mTransColor",
+            "pt_mThinWalled", "pt_RefractAlpha", "pt_RefractBtdf", "pt_ClosurePdf",
+            "mtlxEvalSurface", "EvalMtlxClosure", "SampleMtlxClosure"
+        };
+        for (size_t i = 0; i < vertexData.size(); ++i)
+            ptSymbols.push_back(vertexData[i]->getVariable());
+        for (size_t i = 0; i < publicUniforms.size(); ++i)
+            ptSymbols.push_back(publicUniforms[i]->getVariable());
+        string symLine = "__MTLX_SYMBOLS__";
+        for (const string& s : ptSymbols) symLine += " " + s;
+        emitComment(symLine, stage);
+        emitLineBreak(stage);
+    }
 
     // --- Surface evaluation helper --------------------------------------------
     // Assembles the closure once for the current globals and returns the
