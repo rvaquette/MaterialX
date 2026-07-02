@@ -204,6 +204,13 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("bool pt_mThinWalled = false", stage);
     emitLineBreak(stage);
 
+    // Set the include file used for UV transformations. Image/tiledimage nodes
+    // emit `#include "lib/$fileTransformUv"`; the base GlslShaderGenerator sets
+    // this token in its emitPixelStage, but we override that method so we must
+    // replicate it here (otherwise the include stays literal and fails to load).
+    _tokenSubstitutions[ShaderGenerator::T_FILE_TRANSFORM_UV] =
+        context.getOptions().fileTextureVerticalFlip ? "mx_transform_uv_vflip.glsl" : "mx_transform_uv.glsl";
+
     // MaterialX node function definitions (mx_* bricks + the standard_surface
     // surface assembly, which references the g_pt* globals declared above).
     emitFunctionDefinitions(graph, context, stage);
