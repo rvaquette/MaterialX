@@ -50,7 +50,9 @@ void PathTracerSurfaceNode::emitFunctionCall(const ShaderNode& node, GenContext&
         shadergen.emitLine("vec3 V = g_ptV", stage);
         shadergen.emitLine("vec3 L = g_ptL", stage);
         shadergen.emitLine("vec3 P = g_ptP", stage);
-        shadergen.emitLine("float occlusion = 1.0", stage);
+        // Occlusion is supplied by the entry point (1.0 for Eval/Sample; per-light
+        // shadow-ray visibility for the OPT_MTLX_GATHER preview).
+        shadergen.emitLine("float occlusion = g_ptOcclusion", stage);
         shadergen.emitLineBreak(stage);
 
         const string outColor = output->getVariable() + ".color";
@@ -75,6 +77,10 @@ void PathTracerSurfaceNode::emitFunctionCall(const ShaderNode& node, GenContext&
         {
             if (const ShaderNode* edf = edfInput->getConnectedSibling())
             {
+                // Emission is added once per shading point. Eval/Sample keep it on
+                // (g_ptEmitEmission defaults to 1); the gather preview gates it so the
+                // per-lobe passes (reflection/indirect/transmission) don't re-add it.
+                shadergen.emitLine("if (g_ptEmitEmission != 0)", stage, false);
                 shadergen.emitScopeBegin(stage);
                 shadergen.emitLine("ClosureData closureData = makeClosureData(CLOSURE_TYPE_EMISSION, L, V, N, P, occlusion)", stage);
                 shadergen.emitFunctionCall(*edf, context, stage);

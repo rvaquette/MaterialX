@@ -16,6 +16,8 @@
 #include <MaterialXGenShader/ShaderNode.h>
 #include <MaterialXGenShader/ShaderStage.h>
 
+#include <initializer_list>
+
 MATERIALX_NAMESPACE_BEGIN
 
 namespace
@@ -153,6 +155,11 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("vec3 g_ptBitangent", stage);
     emitLine("vec2 g_ptTexcoord", stage);
     emitLine("int g_ptClosureType", stage);
+    // Occlusion applied inside the surface closure (per-light visibility in the
+    // gather preview; 1.0 otherwise) and emission gate (1 = add EDF once, 0 = skip
+    // so the gather's per-lobe passes don't double-count emission).
+    emitLine("float g_ptOcclusion = 1.0", stage);
+    emitLine("int g_ptEmitEmission = 1", stage);
     const VariableBlock& vertexData = stage.getInputBlock(HW::VERTEX_DATA);
     for (size_t i = 0; i < vertexData.size(); ++i)
     {
@@ -183,10 +190,15 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
         const ShaderPort* v = publicUniforms[i];
         paramVar[v->getName()] = v->getVariable();
     }
-    auto pv = [&](const string& n, const string& fallback) -> string
+    auto pv = [&](std::initializer_list<const char*> names, const string& fallback) -> string
     {
-        auto it = paramVar.find(n);
-        return it != paramVar.end() ? it->second : fallback;
+        for (const char* n : names)
+        {
+            auto it = paramVar.find(n);
+            if (it != paramVar.end())
+                return it->second;
+        }
+        return fallback;
     };
 
     // Lobe-selection material summary globals (constant initializers as required by
@@ -220,15 +232,15 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     // by the closure entry points after pt_LoadParams(matID) has set the params.
     emitLine("void pt_InitMaterialSummary()", stage, false);
     emitScopeBegin(stage);
-    emitLine("pt_mMetal = " + pv("metalness", "0.0"), stage);
-    emitLine("pt_mSpecTrans = " + pv("transmission", "0.0"), stage);
-    emitLine("pt_mBaseColor = (" + pv("base_color", "vec3(0.8)") + ") * (" + pv("base", "1.0") + ")", stage);
-    emitLine("pt_mSpecColor = " + pv("specular_color", "vec3(1.0)"), stage);
-    emitLine("pt_mSpecWeight = " + pv("specular", "1.0"), stage);
-    emitLine("pt_mRough = " + pv("specular_roughness", "0.2"), stage);
-    emitLine("pt_mTransExtraRough = " + pv("transmission_extra_roughness", "0.0"), stage);
-    emitLine("pt_mTransColor = " + pv("transmission_color", "vec3(1.0)"), stage);
-    emitLine("pt_mThinWalled = " + pv("thin_walled", "false"), stage);
+    emitLine("pt_mMetal = " + pv({"metalness", "metallic"}, "0.0"), stage);
+    emitLine("pt_mSpecTrans = " + pv({"transmission"}, "0.0"), stage);
+    emitLine("pt_mBaseColor = (" + pv({"base_color"}, "vec3(0.8)") + ") * (" + pv({"base"}, "1.0") + ")", stage);
+    emitLine("pt_mSpecColor = " + pv({"specular_color"}, "vec3(1.0)"), stage);
+    emitLine("pt_mSpecWeight = " + pv({"specular"}, "1.0"), stage);
+    emitLine("pt_mRough = " + pv({"specular_roughness", "roughness"}, "0.2"), stage);
+    emitLine("pt_mTransExtraRough = " + pv({"transmission_extra_roughness"}, "0.0"), stage);
+    emitLine("pt_mTransColor = " + pv({"transmission_color"}, "vec3(1.0)"), stage);
+    emitLine("pt_mThinWalled = " + pv({"thin_walled"}, "false"), stage);
     emitScopeEnd(stage);
     emitLineBreak(stage);
 
@@ -271,6 +283,125 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
         emitLine("return surfaceshader(vec3(0.0), vec3(0.0))", stage);
     }
     emitFunctionBodyEnd(graph, context, stage);
+    emitLineBreak(stage);
+
+    // --- Injectable BSDF stack (host-facing entry point) ----------------------
+    // Thin wrapper the HOST (skeleton) calls per closure context: it sets the
+    // g_pt* globals then delegates to mtlxEvalSurface (reusing its already-emitted
+    // header + closure stack, so nodes are not emitted twice). Returns the BSDF
+    // response ONLY (emission gated off via g_ptEmitEmission; the host adds
+    // emission + opacity). Everything AFTER the __MTLX_STACK_END__ marker (gather /
+    // Eval / Sample) is the stand-alone injection pipeline, stripped by
+    // materialxMultiClosure.ts when the host provides its own integrator.
+    emitLine("vec3 pt_MtlxLayerStackResponse(int closureType, vec3 L, vec3 V, vec3 N, vec3 P, vec3 T, float occlusion)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("g_ptL = L", stage);
+    emitLine("g_ptV = V", stage);
+    emitLine("g_ptN = N", stage);
+    emitLine("g_ptP = P", stage);
+    emitLine("g_ptTangent = T", stage);
+    emitLine("g_ptBitangent = cross(N, T)", stage);
+    emitLine("g_ptClosureType = closureType", stage);
+    emitLine("g_ptOcclusion = occlusion", stage);
+    emitLine("g_ptEmitEmission = 0", stage);
+    emitLine("State pt_s", stage);
+    emitLine("return mtlxEvalSurface(pt_s).color", stage);
+    emitScopeEnd(stage);
+    emitLineBreak(stage);
+    emitLine("// __MTLX_STACK_END__", stage, false);
+    emitLineBreak(stage);
+
+    // --- Gather preview shading (OPT_MTLX_GATHER) -----------------------------
+    // Single-pass shading that mirrors the MaterialX viewer (used by the low-res
+    // preview): per-light REFLECTION + INDIRECT (environment) + TRANSMISSION and a
+    // single EMISSION. It is host-coupled (scene lights + AnyHit shadow rays), so
+    // it is wrapped in #ifdef OPT_MTLX_GATHER: it is only compiled when the host
+    // shader provides that context, keeping the minimal-stub compile checks and the
+    // recursive Eval/Sample path unaffected.
+    emitLine("#ifdef OPT_MTLX_GATHER", stage, false);
+    emitLineBreak(stage);
+
+    // Convert a scene light to an equivalent directional sample (dir + irradiance).
+    emitLine("vec3 pt_LightToDirectional(Light l, vec3 P, out vec3 dir, out float dist)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("if (int(l.type) == DISTANT_LIGHT)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("dir = normalize(l.position)", stage);
+    emitLine("dist = INF", stage);
+    emitLine("return l.emission", stage);
+    emitScopeEnd(stage);
+    emitLine("vec3 sp", stage);
+    emitLine("vec3 ln", stage);
+    emitLine("if (int(l.type) == QUAD_LIGHT)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("sp = l.position + l.u * rand() + l.v * rand()", stage);
+    emitLine("ln = normalize(cross(l.u, l.v))", stage);
+    emitScopeEnd(stage);
+    emitLine("else", stage, false);
+    emitScopeBegin(stage);
+    emitLine("sp = l.position + UniformSampleSphere(rand(), rand()) * l.radius", stage);
+    emitLine("ln = normalize(sp - l.position)", stage);
+    emitScopeEnd(stage);
+    emitLine("vec3 dl = sp - P", stage);
+    emitLine("dist = length(dl)", stage);
+    emitLine("dir = dl / dist", stage);
+    emitLine("float cosL = max(dot(-dir, ln), 0.0)", stage);
+    emitLine("return l.emission * (l.area * cosL / max(dist * dist, EPS))", stage);
+    emitScopeEnd(stage);
+    emitLineBreak(stage);
+
+    // Single-pass gather shading for the current hit (no recursion).
+    emitLine("vec3 mtlxShadeGather(State state, Ray r)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("int matID = state.matID", stage);
+    emitLine("pt_InitMaterialSummary()", stage);
+    emitLine("vec3 N = normalize(state.ffnormal)", stage);
+    emitLine("vec3 V = -r.direction", stage);
+    emitLine("vec3 P = state.fhp", stage);
+    emitLine("g_ptV = V", stage);
+    emitLine("g_ptN = N", stage);
+    emitLine("g_ptP = P", stage);
+    emitLine("g_ptTangent = state.tangent", stage);
+    emitLine("g_ptBitangent = state.bitangent", stage);
+    emitLine("g_ptTexcoord = state.texCoord", stage);
+    emitLine("vec3 col = vec3(0.0)", stage);
+    emitComment("(1) Direct lighting: REFLECTION closure per light (emission gated off).", stage);
+    emitLine("g_ptEmitEmission = 0", stage);
+    emitLine("for (int i = 0; i < numOfLights; i++)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("int idx = i * 5", stage);
+    emitLine("vec3 lp = texelFetch(lightsTex, ivec2(idx + 0, 0), 0).xyz", stage);
+    emitLine("vec3 le = texelFetch(lightsTex, ivec2(idx + 1, 0), 0).xyz", stage);
+    emitLine("vec3 lu = texelFetch(lightsTex, ivec2(idx + 2, 0), 0).xyz", stage);
+    emitLine("vec3 lv = texelFetch(lightsTex, ivec2(idx + 3, 0), 0).xyz", stage);
+    emitLine("vec3 lpar = texelFetch(lightsTex, ivec2(idx + 4, 0), 0).xyz", stage);
+    emitLine("Light l = Light(lp, le, lu, lv, lpar.x, lpar.y, lpar.z)", stage);
+    emitLine("vec3 Ldir", stage);
+    emitLine("float dist", stage);
+    emitLine("vec3 intensity = pt_LightToDirectional(l, P, Ldir, dist)", stage);
+    emitLine("float occ = 1.0", stage);
+    emitLine("Ray sray = Ray(P + N * EPS, Ldir)", stage);
+    emitLine("if (AnyHit(sray, dist - 2.0 * EPS)) occ = 0.0", stage);
+    emitLine("g_ptOcclusion = occ", stage);
+    emitLine("g_ptL = Ldir", stage);
+    emitLine("g_ptClosureType = CLOSURE_TYPE_REFLECTION", stage);
+    emitLine("col += intensity * mtlxEvalSurface(state).color", stage);
+    emitScopeEnd(stage);
+    emitLine("g_ptOcclusion = 1.0", stage);
+    emitComment("(2) Indirect environment radiance + (3) environment transmission.", stage);
+    emitLine("g_ptL = vec3(0.0)", stage);
+    emitLine("g_ptClosureType = CLOSURE_TYPE_INDIRECT", stage);
+    emitLine("col += mtlxEvalSurface(state).color", stage);
+    emitLine("g_ptClosureType = CLOSURE_TYPE_TRANSMISSION", stage);
+    emitLine("col += mtlxEvalSurface(state).color", stage);
+    emitComment("(4) Emission (added exactly once).", stage);
+    emitLine("g_ptEmitEmission = 1", stage);
+    emitLine("g_ptClosureType = CLOSURE_TYPE_EMISSION", stage);
+    emitLine("col += mtlxEvalSurface(state).color", stage);
+    emitLine("return col", stage);
+    emitScopeEnd(stage);
+    emitLineBreak(stage);
+    emitLine("#endif", stage, false);
     emitLineBreak(stage);
 
     // --- Importance sampling (T012/T013/T015) ---------------------------------
