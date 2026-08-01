@@ -47,7 +47,8 @@ set(GENSHADER_DEPS ${GENSHADER}JsGenContext.cpp
 set(GENESSL_DEPS ${GENESSL}JsEsslShaderGenerator.cpp)
 set(GENOSL_DEPS ${GENOSL}JsOslShaderGenerator.cpp)
 set(GENGLSL_DEPS ${GENGLSL}JsGlslShaderGenerator.cpp
-    ${GENGLSL}JsPathTracerGlslShaderGenerator.cpp)
+    ${GENGLSL}JsPathTracerGlslShaderGenerator.cpp
+    ${GENGLSL}JsEsslHostShaderGenerator.cpp)
 set(GENMSL_DEPS ${GENMSL}JsMslShaderGenerator.cpp)
 set(GENVK_DEPS ${GENVK}JsVkShaderGenerator.cpp)
 set(GENWGSL_DEPS ${GENWGSL}JsWgslShaderGenerator.cpp)

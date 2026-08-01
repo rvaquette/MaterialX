@@ -23,6 +23,17 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 const params = new URLSearchParams(document.location.search);
 const geometryURL = params.get('geom') || 'Geometry/sphere.obj';
 const envURL = params.get('env') || 'Lights/san_giuseppe_bridge_split.hdr';
+// Diffuse irradiance map. Defaults to the pre-convolved map that lives next to
+// the radiance map under a sibling `irradiance/` folder, matching the viewer
+// (index.html). Can be overridden with the `envIrradiance` query parameter.
+const deriveIrradianceURL = (radianceURL) =>
+{
+    const slash = radianceURL.lastIndexOf('/');
+    const dir = slash === -1 ? '' : radianceURL.slice(0, slash + 1);
+    const base = slash === -1 ? radianceURL : radianceURL.slice(slash + 1);
+    return `${dir}irradiance/${base}`;
+};
+const envIrradianceURL = params.get('envIrradiance') || deriveIrradianceURL(envURL);
 const materialFilename = params.get('file') || 'Materials/Examples/StandardSurface/standard_surface_default.mtlx';
 const width = parseInt(params.get('width'), 10) || 1024;
 const height = parseInt(params.get('height'), 10) || 1024;
@@ -57,7 +68,7 @@ async function renderToImage()
 
     const [radianceTexture, irradianceTexture, lightRigXml, mxIn] = await Promise.all([
         new Promise(resolve => hdrLoader.load(envURL, resolve)),
-        new Promise(resolve => hdrLoader.load(envURL, resolve)),
+        new Promise(resolve => hdrLoader.load(envIrradianceURL, resolve)),
         new Promise(resolve => fileLoader.load('Lights/san_giuseppe_bridge_split.mtlx', resolve)),
         import(/* webpackIgnore: true */ './JsMaterialXGenShader.js')
             .then(({ default: MaterialX }) => MaterialX())

@@ -42,6 +42,7 @@ module.exports = {
         path: path.resolve(__dirname, 'dist')
     },
     mode: "development",
+    devtool: "source-map",
     devServer: {
         // Allow the DWARF DevTools extension to re-fetch the .wasm for debug symbols.
         headers: {

@@ -27,20 +27,32 @@ namespace
 // Order matters: "bitangentWorld" contains "tangentWorld" as a substring.
 string pathTracerStateSourceForVertexVar(const string& var, const string& typeName)
 {
-    if (var.find("normalWorld") != string::npos)
+    // Match every space (world/object/model) of each geometric stream: the path
+    // tracer only tracks world-space frames (g_ptN/g_ptTangent/g_ptBitangent), so
+    // map object/model variants to them too rather than letting them fall through
+    // to vec3(0.0) (which silently breaks normal/tangent-driven graph nodes). NB:
+    // "bitangent" must be tested before "tangent" (it contains that substring).
+    if (var.find("normal") != string::npos)
     {
         return "g_ptN";
     }
-    if (var.find("bitangentWorld") != string::npos)
+    if (var.find("bitangent") != string::npos)
     {
         return "g_ptBitangent";
     }
-    if (var.find("tangentWorld") != string::npos)
+    if (var.find("tangent") != string::npos)
     {
         return "g_ptTangent";
     }
-    if (var.find("positionWorld") != string::npos)
+    if (var.find("position") != string::npos)
     {
+        // The path tracer only tracks the WORLD hit position (g_ptP = state.fhp).
+        // Map EVERY position space (positionWorld / positionObject / positionModel)
+        // to it: without the object's inverse transform we cannot recover true
+        // object/model space, but using the world position keeps position-driven
+        // nodes (e.g. procedural opacity masks) spatially varying instead of
+        // collapsing to vec3(0.0) -> an object-space mask that reads 0 everywhere
+        // makes the whole surface transparent (the object vanishes).
         return "g_ptP";
     }
     if (var.find("texcoord") != string::npos)
@@ -75,6 +87,14 @@ ShaderPtr PathTracerGlslShaderGenerator::generate(const string& name, ElementPtr
     // literals rather than publishing them as unbound uniforms, so the path tracer
     // receives the authored material values without binding any uniforms.
     context.getOptions().shaderInterfaceType = SHADER_INTERFACE_REDUCED;
+    // Our meshes are glTF: the loader stores V already flipped to GL convention
+    // (state.texCoord.y = 1 - authoredV) for direct GL texture sampling. MaterialX
+    // procedural coordinate nodes (texcoord/geomprop UV0, ramp*, etc.) expect the
+    // authored V (origin top-left), so the closure entry points hand MaterialX
+    // (x, 1 - state.texCoord.y) = authoredV. To keep IMAGE sampling identical we
+    // enable fileTextureVerticalFlip so image nodes re-flip to GL convention
+    // (mx_transform_uv_vflip), exactly matching the MaterialXView reference.
+    context.getOptions().fileTextureVerticalFlip = true;
     return EsslShaderGenerator::generate(name, element, context);
 }
 
@@ -160,6 +180,14 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     // so the gather's per-lobe passes don't double-count emission).
     emitLine("float g_ptOcclusion = 1.0", stage);
     emitLine("int g_ptEmitEmission = 1", stage);
+    // Surface opacity evaluated by mtlxEvalSurface (procedural/nodegraph-driven
+    // opacity masks): the host reads this after evaluating the surface to apply
+    // stochastic coverage/cutout. 1.0 = fully opaque.
+    emitLine("float g_ptOpacity = 1.0", stage);
+    // Surface emission evaluated by mtlxEvalSurface (procedural/nodegraph-driven
+    // emission_color, e.g. a UV/position debug that EMITS a coordinate). The host
+    // reads this instead of the constant pt_mEmission summary when procedural.
+    emitLine("vec3 g_ptEmission = vec3(0.0)", stage);
     const VariableBlock& vertexData = stage.getInputBlock(HW::VERTEX_DATA);
     for (size_t i = 0; i < vertexData.size(); ++i)
     {
@@ -185,10 +213,12 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     // pt_InitMaterialSummary() to derive the lobe-selection summary from the
     // authored parameter globals.
     StringMap paramVar;
+    StringMap paramType;
     for (size_t i = 0; i < publicUniforms.size(); ++i)
     {
         const ShaderPort* v = publicUniforms[i];
         paramVar[v->getName()] = v->getVariable();
+        paramType[v->getName()] = _syntax->getTypeName(v->getType());
     }
     auto pv = [&](std::initializer_list<const char*> names, const string& fallback) -> string
     {
@@ -201,6 +231,55 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
         return fallback;
     };
 
+    // Detect a procedural (nodegraph-driven) opacity/alpha input on the surface
+    // shader node. With SHADER_INTERFACE_REDUCED a connected opacity is folded into
+    // the graph body (NOT a published uniform), so pt_InitMaterialSummary cannot
+    // read it and the host would treat the surface as fully opaque (e.g. a cutout
+    // mask driven by position). When procedural we (a) flag it via pt_mProcOpacity
+    // so the host evaluates the graph per hit, and (b) capture the computed value
+    // into g_ptOpacity inside mtlxEvalSurface.
+    const ShaderGraphOutputSocket* opOutSocket = graph.getOutputSocket();
+    const ShaderNode* opSurfaceNode =
+        (opOutSocket && opOutSocket->getConnection()) ? opOutSocket->getConnection()->getNode() : nullptr;
+    const ShaderInput* opacityInput = nullptr;
+    if (opSurfaceNode)
+    {
+        for (const char* n : {"opacity", "geometry_opacity", "alpha"})
+        {
+            const ShaderInput* in = opSurfaceNode->getInput(n);
+            if (in) { opacityInput = in; break; }
+        }
+    }
+    // A published-uniform opacity (constant, folded as a literal global) is handled
+    // by pt_InitMaterialSummary; those inputs still report a graph connection, so
+    // "procedural" must EXCLUDE them. Procedural == not a published param AND
+    // connected (i.e. exactly the case the constant summary lookup misses).
+    bool opacityIsPublishedParam = false;
+    for (const char* n : {"opacity", "geometry_opacity", "alpha"})
+        if (paramVar.find(n) != paramVar.end()) { opacityIsPublishedParam = true; break; }
+    const bool opacityProcedural =
+        !opacityIsPublishedParam && opacityInput && opacityInput->getConnection() != nullptr;
+
+    // Same treatment for a nodegraph-driven emission_color (e.g. a UV/position
+    // debug material that EMITS a coordinate). The constant summary pt_mEmission
+    // only sees a published emission_color, so a graph-driven one reads vec3(0)
+    // -> black. Detect it, flag pt_mProcEmission, and capture the evaluated
+    // emission into g_ptEmission inside mtlxEvalSurface.
+    const ShaderInput* emissionColorInput = nullptr;
+    if (opSurfaceNode)
+    {
+        for (const char* n : {"emission_color", "emissive", "emissiveColor"})
+        {
+            const ShaderInput* in = opSurfaceNode->getInput(n);
+            if (in) { emissionColorInput = in; break; }
+        }
+    }
+    bool emissionColorIsPublishedParam = false;
+    for (const char* n : {"emission_color", "emissive", "emissiveColor"})
+        if (paramVar.find(n) != paramVar.end()) { emissionColorIsPublishedParam = true; break; }
+    const bool emissionProcedural =
+        !emissionColorIsPublishedParam && emissionColorInput && emissionColorInput->getConnection() != nullptr;
+
     // Lobe-selection material summary globals (constant initializers as required by
     // GLSL ES; the real values are assigned by pt_InitMaterialSummary() below,
     // after the parameter globals are loaded for the current matID).
@@ -208,12 +287,23 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("float pt_mMetal = 0.0", stage);
     emitLine("float pt_mSpecTrans = 0.0", stage);
     emitLine("vec3 pt_mBaseColor = vec3(0.0)", stage);
+    emitLine("vec3 pt_mEmission = vec3(0.0)", stage);
     emitLine("vec3 pt_mSpecColor = vec3(0.0)", stage);
     emitLine("float pt_mSpecWeight = 0.0", stage);
     emitLine("float pt_mRough = 0.0", stage);
     emitLine("float pt_mTransExtraRough = 0.0", stage);
     emitLine("vec3 pt_mTransColor = vec3(0.0)", stage);
     emitLine("bool pt_mThinWalled = false", stage);
+    emitLine("float pt_mIor = 1.5", stage);
+    emitLine("float pt_mAnisotropy = 0.0", stage);
+    emitLine("float pt_mAnisoRotDeg = 0.0", stage);
+    emitLine("float pt_mOpacity = 1.0", stage);
+    // True when opacity is nodegraph-driven (procedural mask); the host then
+    // evaluates mtlxEvalSurface per hit to read the real coverage via g_ptOpacity.
+    emitLine(string("bool pt_mProcOpacity = ") + (opacityProcedural ? "true" : "false"), stage);
+    // True when emission_color is nodegraph-driven; the host then reads g_ptEmission
+    // (evaluated per hit) instead of the constant pt_mEmission summary.
+    emitLine(string("bool pt_mProcEmission = ") + (emissionProcedural ? "true" : "false"), stage);
     emitLineBreak(stage);
 
     // Set the include file used for UV transformations. Image/tiledimage nodes
@@ -232,15 +322,53 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     // by the closure entry points after pt_LoadParams(matID) has set the params.
     emitLine("void pt_InitMaterialSummary()", stage, false);
     emitScopeBegin(stage);
-    emitLine("pt_mMetal = " + pv({"metalness", "metallic"}, "0.0"), stage);
-    emitLine("pt_mSpecTrans = " + pv({"transmission"}, "0.0"), stage);
-    emitLine("pt_mBaseColor = (" + pv({"base_color"}, "vec3(0.8)") + ") * (" + pv({"base"}, "1.0") + ")", stage);
+    emitLine("pt_mMetal = " + pv({"metalness", "metallic", "base_metalness"}, "0.0"), stage);
+    emitLine("pt_mSpecTrans = " + pv({"transmission", "specTrans", "transmission_weight"}, "0.0"), stage);
+    emitLine("pt_mBaseColor = (" + pv({"base_color", "baseColor", "diffuseColor"}, "vec3(0.8)") + ") * (" + pv({"base", "base_weight"}, "1.0") + ")", stage);
+    // Emission color * strength. Strength fallback is 1.0 so models WITHOUT a
+    // separate strength input (UsdPreviewSurface emissiveColor) still emit; models
+    // WITH a weight (standard_surface emission=0 default, gltf emissive_strength)
+    // use their real global.
+    emitLine("pt_mEmission = (" + pv({"emission_color", "emissive", "emissiveColor"}, "vec3(0.0)") + ") * (" + pv({"emission", "emissive_strength", "emission_luminance"}, "1.0") + ")", stage);
     emitLine("pt_mSpecColor = " + pv({"specular_color"}, "vec3(1.0)"), stage);
-    emitLine("pt_mSpecWeight = " + pv({"specular"}, "1.0"), stage);
+    emitLine("pt_mSpecWeight = " + pv({"specular", "specular_weight"}, "1.0"), stage);
     emitLine("pt_mRough = " + pv({"specular_roughness", "roughness"}, "0.2"), stage);
     emitLine("pt_mTransExtraRough = " + pv({"transmission_extra_roughness"}, "0.0"), stage);
-    emitLine("pt_mTransColor = " + pv({"transmission_color"}, "vec3(1.0)"), stage);
-    emitLine("pt_mThinWalled = " + pv({"thin_walled"}, "false"), stage);
+    // Transmission tint: use transmission_color when the model has one
+    // (standard_surface / open_pbr), else fall back to the base color (gltf_pbr /
+    // disney_principled use base color as the glass tint).
+    emitLine("pt_mTransColor = " + pv({"transmission_color", "base_color", "baseColor"}, "vec3(1.0)"), stage);
+    emitLine("pt_mThinWalled = " + pv({"thin_walled", "geometry_thin_walled"}, "false"), stage);
+    emitLine("pt_mIor = " + pv({"specular_IOR", "ior", "specular_ior"}, "1.5"), stage);
+    emitLine("pt_mAnisotropy = " + pv({"specular_anisotropy", "anisotropy_strength", "anisotropic", "specular_roughness_anisotropy"}, "0.0"), stage);
+    {
+        const string srot = pv({"specular_rotation"}, "");
+        const string arot = pv({"anisotropy_rotation"}, "");
+        if (!srot.empty())
+            emitLine("pt_mAnisoRotDeg = (" + srot + ") * 360.0", stage);
+        else if (!arot.empty())
+            emitLine("pt_mAnisoRotDeg = (" + arot + ") * -57.2957795", stage);
+        else
+            emitLine("pt_mAnisoRotDeg = 0.0", stage);
+    }
+    {
+        // Opacity: standard_surface authors a color3 `opacity` (use luminance);
+        // UsdPreviewSurface / open_pbr use a float `opacity` / `geometry_opacity`;
+        // gltf_pbr uses a float `alpha`. Pick the first authored one and emit the
+        // type-correct assignment (dot() only valid on the color3 form).
+        string opVar, opTy;
+        for (const char* n : {"opacity", "geometry_opacity", "alpha"})
+        {
+            auto it = paramVar.find(n);
+            if (it != paramVar.end()) { opVar = it->second; opTy = paramType[n]; break; }
+        }
+        if (opVar.empty())
+            emitLine("pt_mOpacity = 1.0", stage);
+        else if (opTy == "vec3")
+            emitLine("pt_mOpacity = dot(" + opVar + ", vec3(0.2126, 0.7152, 0.0722))", stage);
+        else
+            emitLine("pt_mOpacity = " + opVar, stage);
+    }
     emitScopeEnd(stage);
     emitLineBreak(stage);
 
@@ -261,6 +389,25 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     // .mtlx document (emitted as globals above); they are not read from the
     // material texture (State.mat) at all.
     emitFunctionCalls(graph, context, stage, ShaderNode::Classification::TEXTURE);
+    // Capture a procedural opacity mask (computed by the texture/procedural node
+    // stack above) so the host can apply stochastic coverage/cutout. Constant
+    // opacity is handled by pt_InitMaterialSummary instead.
+    if (opacityProcedural)
+    {
+        const string opVar = opacityInput->getConnection()->getVariable();
+        if (_syntax->getTypeName(opacityInput->getType()) == "vec3")
+            emitLine("g_ptOpacity = dot(" + opVar + ", vec3(0.2126, 0.7152, 0.0722))", stage);
+        else
+            emitLine("g_ptOpacity = " + opVar, stage);
+    }
+    // Capture a procedural emission_color (evaluated above) * its weight so the
+    // host emits the graph-driven value instead of the constant pt_mEmission.
+    if (emissionProcedural)
+    {
+        const string ecVar = emissionColorInput->getConnection()->getVariable();
+        const string ewExpr = pv({"emission", "emissive_strength", "emission_luminance"}, "1.0");
+        emitLine("g_ptEmission = (" + ecVar + ") * (" + ewExpr + ")", stage);
+    }
     for (ShaderGraphOutputSocket* socket : graph.getOutputSockets())
     {
         if (socket->getConnection())
@@ -307,8 +454,6 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("State pt_s", stage);
     emitLine("return mtlxEvalSurface(pt_s).color", stage);
     emitScopeEnd(stage);
-    emitLineBreak(stage);
-    emitLine("// __MTLX_STACK_END__", stage, false);
     emitLineBreak(stage);
 
     // --- Gather preview shading (OPT_MTLX_GATHER) -----------------------------
@@ -363,7 +508,7 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("g_ptP = P", stage);
     emitLine("g_ptTangent = state.tangent", stage);
     emitLine("g_ptBitangent = state.bitangent", stage);
-    emitLine("g_ptTexcoord = state.texCoord", stage);
+    emitLine("g_ptTexcoord = vec2(state.texCoord.x, 1.0 - state.texCoord.y)", stage);
     emitLine("vec3 col = vec3(0.0)", stage);
     emitComment("(1) Direct lighting: REFLECTION closure per light (emission gated off).", stage);
     emitLine("g_ptEmitEmission = 0", stage);
@@ -434,7 +579,8 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("if (Ll.z >= 0.0) return vec3(0.0)", stage);
     emitLine("float etaEff = pt_mThinWalled ? 1.0 : state.eta", stage);
     emitLine("float aT = pt_RefractAlpha()", stage);
-    emitLine("vec3 pt_Hraw = Vl + Ll * etaEff", stage);
+    emitComment("Walter/disney refraction half-vector: H = normalize(L + V*eta) (matches EvalMicrofacetRefraction). NOT V + L*eta.", stage);
+    emitLine("vec3 pt_Hraw = Ll + Vl * etaEff", stage);
     emitComment("Degenerate half-vector (etaEff ~ 1, i.e. thin-walled straight transmission): no microfacet BTDF.", stage);
     emitLine("if (dot(pt_Hraw, pt_Hraw) < 1e-6) return vec3(0.0)", stage);
     emitLine("vec3 H = normalize(pt_Hraw)", stage);
@@ -520,7 +666,7 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("g_ptP = state.fhp", stage);
     emitLine("g_ptTangent = state.tangent", stage);
     emitLine("g_ptBitangent = state.bitangent", stage);
-    emitLine("g_ptTexcoord = state.texCoord", stage);
+    emitLine("g_ptTexcoord = vec2(state.texCoord.x, 1.0 - state.texCoord.y)", stage);
     emitLine("g_ptClosureType = CLOSURE_TYPE_REFLECTION", stage);
     emitLine("surfaceshader pt_surf = mtlxEvalSurface(state)", stage);
     emitLine("return pt_surf.color", stage);
@@ -595,11 +741,16 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("g_ptP = state.fhp", stage);
     emitLine("g_ptTangent = state.tangent", stage);
     emitLine("g_ptBitangent = state.bitangent", stage);
-    emitLine("g_ptTexcoord = state.texCoord", stage);
+    emitLine("g_ptTexcoord = vec2(state.texCoord.x, 1.0 - state.texCoord.y)", stage);
     emitLine("g_ptClosureType = CLOSURE_TYPE_REFLECTION", stage);
     emitLine("surfaceshader pt_surf = mtlxEvalSurface(state)", stage);
     emitLine("return pt_surf.color", stage);
     emitScopeEnd(stage);
+    emitLineBreak(stage);
+
+    // Mark end of injectable closure code. Everything above this line is kept by
+    // the multi-material assembler (materialxMultiClosure.ts); nothing follows.
+    emitLine("// __MTLX_STACK_END__", stage, false);
     emitLineBreak(stage);
 }
 

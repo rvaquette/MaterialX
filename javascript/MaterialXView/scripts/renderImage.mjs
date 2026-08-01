@@ -11,7 +11,8 @@
 //
 // Usage:
 //   node scripts/renderImage.mjs --geom Geometry/teapot.obj --env Lights/goegap.hdr \
-//        --width 1024 --height 1024 --out render.png [--mtlx Materials/.../foo.mtlx]
+//        --width 1024 --height 1024 --out render.png [--mtlx Materials/.../foo.mtlx] \
+//        [--envIrradiance Lights/irradiance/goegap.hdr]
 //
 import http from 'node:http';
 import fs from 'node:fs';
@@ -28,8 +29,9 @@ function arg(name, def)
     return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : def;
 }
 
-const geom = arg('geom', 'Geometry/sphere.obj');
+const geom = arg('geom', 'Geometry/shaderball.glb');
 const env = arg('env', 'Lights/san_giuseppe_bridge_split.hdr');
+const envIrradiance = arg('envIrradiance', '');
 const file = arg('mtlx', arg('file', 'Materials/Examples/StandardSurface/standard_surface_default.mtlx'));
 const width = parseInt(arg('width', '1024'), 10);
 const height = parseInt(arg('height', '1024'), 10);
@@ -58,7 +60,7 @@ const server = http.createServer((req, res) =>
 
 await new Promise(resolve => server.listen(0, resolve));
 const port = server.address().port;
-const url = `http://localhost:${port}/render.html?geom=${encodeURIComponent(geom)}&env=${encodeURIComponent(env)}&file=${encodeURIComponent(file)}&width=${width}&height=${height}`;
+const url = `http://localhost:${port}/render.html?geom=${encodeURIComponent(geom)}&env=${encodeURIComponent(env)}${envIrradiance ? `&envIrradiance=${encodeURIComponent(envIrradiance)}` : ''}&file=${encodeURIComponent(file)}&width=${width}&height=${height}`;
 
 const browser = await chromium.launch({
     args: ['--use-gl=angle', '--use-angle=d3d11', '--ignore-gpu-blocklist', '--enable-gpu', '--enable-unsafe-webgpu']
@@ -72,19 +74,6 @@ try
     await page.waitForFunction(() => window.renderComplete || window.renderError, null, { timeout: 120000 });
     const error = await page.evaluate(() => window.renderError);
     if (error) throw new Error(error);
-
-    const cameraInfo = await page.evaluate(() => window.cameraInfo);
-    if (cameraInfo)
-    {
-        console.log('Camera:');
-        console.log(`  position : (${cameraInfo.position.x.toFixed(4)}, ${cameraInfo.position.y.toFixed(4)}, ${cameraInfo.position.z.toFixed(4)})`);
-        console.log(`  lookAt   : (${cameraInfo.lookAt.x.toFixed(4)}, ${cameraInfo.lookAt.y.toFixed(4)}, ${cameraInfo.lookAt.z.toFixed(4)})`);
-        console.log(`  fov      : ${cameraInfo.fov}`);
-        console.log(`  aspect   : ${cameraInfo.aspect.toFixed(4)}  near: ${cameraInfo.near}  far: ${cameraInfo.far}`);
-        console.log(`  aperture : ${cameraInfo.aperture ?? 'N/A'}`);
-        console.log(`  focalDist: ${cameraInfo.focalDistance}`);
-        console.log(`  focalLen : ${cameraInfo.focalLength.toFixed(2)} mm  (filmGauge: ${cameraInfo.filmGauge} mm)`);
-    }
 
     const dataUrl = await page.evaluate(() => document.getElementById('webglcanvas').toDataURL('image/png'));
     fs.writeFileSync(out, Buffer.from(dataUrl.split(',')[1], 'base64'));

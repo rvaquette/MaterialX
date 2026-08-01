@@ -19,6 +19,11 @@
       "name": "OpenPbr",
       "path": "../../resources/Materials/Examples/OpenPbr",
       "baseURL": "Materials/Examples/OpenPbr"
+    },
+    {
+      "name": "Nodes",
+      "path": "../../resources/Materials/nodes",
+      "baseURL": "Materials/nodes"
     }
   ]
 }
