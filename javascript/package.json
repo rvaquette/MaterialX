@@ -1,6 +1,10 @@
 {
   "name": "materialx-javascript",
   "private": true,
+  "scripts": {
+    "build:wasm:win": "cmd /c build_javascript_win.bat",
+    "test:all": "npm run test --workspaces --if-present"
+  },
   "workspaces": [
     "MaterialXTest",
     "MaterialXView"

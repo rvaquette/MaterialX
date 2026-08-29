@@ -26,6 +26,8 @@ using PathTracerGlslShaderGeneratorPtr = shared_ptr<class PathTracerGlslShaderGe
 /// It derives from EsslShaderGenerator to reuse GLSL ES 3.00 (WebGL2) emission
 /// (directives, precision, version "300 es") while reusing the upstream
 /// "genglsl" node implementations (mx_*_bsdf.glsl, mx_*_edf.glsl, image, etc.).
+/// ABI contract: generated output must provide pt_InitMaterialSummary,
+/// EvalMtlxClosure, and SampleMtlxClosure entrypoints for viewer integration.
 ///
 /// This is the foundational skeleton: the closure stage assembly
 /// (Eval/Sample emission, texture/sampler binding, normal-map/TBN handling) is

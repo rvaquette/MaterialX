@@ -100,6 +100,10 @@ ShaderPtr PathTracerGlslShaderGenerator::generate(const string& name, ElementPtr
 
 void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, GenContext& context, ShaderStage& stage) const
 {
+    // ABI-sensitive contract for viewer substitution pipeline:
+    // emitPixelStage must keep closure entrypoints compatible with
+    // pt_InitMaterialSummary, EvalMtlxClosure, and SampleMtlxClosure.
+
     // --- No-silent-failure guard (FR-007 / SC-004) ----------------------------
     // Reject closures that have no path-tracer analogue in v1 (volume/VDF) with a
     // named error rather than emitting incorrect GLSL.
@@ -304,6 +308,9 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     // True when emission_color is nodegraph-driven; the host then reads g_ptEmission
     // (evaluated per hit) instead of the constant pt_mEmission summary.
     emitLine(string("bool pt_mProcEmission = ") + (emissionProcedural ? "true" : "false"), stage);
+    emitLine("float pt_mCoatWeight = 0.0", stage);
+    emitLine("float pt_mCoatRough = 0.0", stage);
+    emitLine("float pt_mCoatF0 = 0.0", stage);
     emitLineBreak(stage);
 
     // Set the include file used for UV transformations. Image/tiledimage nodes
@@ -368,6 +375,13 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
             emitLine("pt_mOpacity = dot(" + opVar + ", vec3(0.2126, 0.7152, 0.0722))", stage);
         else
             emitLine("pt_mOpacity = " + opVar, stage);
+    }
+    // Coat lobe parameters: weight, roughness, and F0 derived from IOR.
+    emitLine("pt_mCoatWeight = " + pv({"coat_weight"}, "0.0"), stage);
+    emitLine("pt_mCoatRough  = " + pv({"coat_roughness"}, "0.0"), stage);
+    {
+        const string coatIor = pv({"coat_IOR", "coat_ior"}, "1.5");
+        emitLine("{ float _ce = (" + coatIor + " - 1.0) / (" + coatIor + " + 1.0); pt_mCoatF0 = _ce * _ce; }", stage);
     }
     emitScopeEnd(stage);
     emitLineBreak(stage);
@@ -616,7 +630,7 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("float pt_Fv = pt_F0lum + (1.0 - pt_F0lum) * pow(1.0 - pt_NDotV, 5.0)", stage);
     emitLine("float pt_diffLum = (1.0 - pt_metal) * (1.0 - pt_mSpecTrans) * dot(pt_mBaseColor, vec3(0.2126, 0.7152, 0.0722))", stage);
     emitLine("float pt_pTrans = clamp(pt_wTrans * (1.0 - pt_Fv), 0.0, 0.9)", stage);
-    emitLine("float pt_pSpec = clamp(pt_Fv / (pt_Fv + (1.0 - pt_Fv) * pt_diffLum + 1e-3), 0.1, 0.9)", stage);
+    emitLine("float pt_pSpec = clamp(pt_Fv / (pt_Fv + (1.0 - pt_Fv) * pt_diffLum + 1e-3), 0.01, 0.9)", stage);
     emitLine("if (pt_Ll.z < 0.0)", stage, false);
     emitScopeBegin(stage);
     emitLine("float pdfT", stage);
@@ -629,7 +643,12 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("float pt_NDotH = clamp(pt_H.z, 0.0, 1.0)", stage);
     emitLine("float pt_specPdf = SmithG(pt_NDotV, pt_a) * GTR2(pt_NDotH, pt_a) / (4.0 * pt_NDotV)", stage);
     emitLine("float pt_diffPdf = max(pt_Ll.z, 1e-4) * INV_PI", stage);
-    emitLine("return max((1.0 - pt_pTrans) * (pt_pSpec * pt_specPdf + (1.0 - pt_pSpec) * pt_diffPdf), 1e-6)", stage);
+    emitLine("float pt_coat_Fv = pt_mCoatF0 + (1.0 - pt_mCoatF0) * pow(1.0 - pt_NDotV, 5.0)", stage);
+    emitLine("float pt_pCoat = clamp(pt_mCoatWeight * pt_coat_Fv, 0.0, 0.9)", stage);
+    emitLine("float pt_coat_a = max(pt_mCoatRough * pt_mCoatRough, 1e-4)", stage);
+    emitLine("float pt_coatPdf = SmithG(pt_NDotV, pt_coat_a) * GTR2(pt_NDotH, pt_coat_a) / (4.0 * pt_NDotV)", stage);
+    emitLine("float pt_basePdf = pt_pSpec * pt_specPdf + (1.0 - pt_pSpec) * pt_diffPdf", stage);
+    emitLine("return max((1.0 - pt_pTrans) * (pt_pCoat * pt_coatPdf + (1.0 - pt_pCoat) * pt_basePdf), 1e-6)", stage);
     emitScopeEnd(stage);
     emitLineBreak(stage);
 
@@ -690,9 +709,12 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("float pt_Fv = pt_F0lum + (1.0 - pt_F0lum) * pow(1.0 - pt_NDotV, 5.0)", stage);
     emitLine("float pt_diffLum = (1.0 - pt_metal) * (1.0 - pt_mSpecTrans) * dot(pt_mBaseColor, vec3(0.2126, 0.7152, 0.0722))", stage);
     emitLine("float pt_pTrans = clamp(pt_wTrans * (1.0 - pt_Fv), 0.0, 0.9)", stage);
-    emitLine("float pt_pSpec = clamp(pt_Fv / (pt_Fv + (1.0 - pt_Fv) * pt_diffLum + 1e-3), 0.1, 0.9)", stage);
+    emitLine("float pt_pSpec = clamp(pt_Fv / (pt_Fv + (1.0 - pt_Fv) * pt_diffLum + 1e-3), 0.01, 0.9)", stage);
+    emitLine("float pt_coat_Fv_s = pt_mCoatF0 + (1.0 - pt_mCoatF0) * pow(1.0 - pt_NDotV, 5.0)", stage);
+    emitLine("float pt_pCoat_s = clamp(pt_mCoatWeight * pt_coat_Fv_s, 0.0, 0.9)", stage);
     emitLine("float pt_rough = clamp(pt_mRough, 0.001, 1.0)", stage);
     emitLine("float pt_a = max(pt_rough * pt_rough, 1e-4)", stage);
+    emitLine("float pt_coat_a_s = max(pt_mCoatRough * pt_mCoatRough, 1e-4)", stage);
     emitLine("float pt_r1 = rand()", stage);
     emitLine("float pt_r2 = rand()", stage);
     emitLine("float pt_sel = rand()", stage);
@@ -707,7 +729,16 @@ void PathTracerGlslShaderGenerator::emitPixelStage(const ShaderGraph& graph, Gen
     emitLine("if (dot(pt_Ll, pt_Ll) < 1e-8) pt_Ll = reflect(-pt_Vl, pt_Hl)", stage);
     emitLine("pt_Ll = normalize(pt_Ll)", stage);
     emitScopeEnd(stage);
-    emitLine("else if (pt_sel < pt_pTrans + (1.0 - pt_pTrans) * pt_pSpec)", stage, false);
+    emitLine("else if (pt_sel < pt_pTrans + (1.0 - pt_pTrans) * pt_pCoat_s)", stage, false);
+    emitScopeBegin(stage);
+    emitLine("vec3 pt_Hl_coat = SampleGGXVNDF(pt_Vl, pt_coat_a_s, pt_coat_a_s, pt_r1, pt_r2)", stage);
+    emitLine("if (pt_Hl_coat.z < 0.0) pt_Hl_coat = -pt_Hl_coat", stage);
+    emitLine("pt_Ll = reflect(-pt_Vl, pt_Hl_coat)", stage);
+    emitComment("Coat only reflects; clamp below-horizon directions to avoid false transmission detection.", stage);
+    emitLine("if (pt_Ll.z < 1e-4) pt_Ll = vec3(-pt_Ll.x, -pt_Ll.y, 1e-4)", stage);
+    emitLine("pt_Ll = normalize(pt_Ll)", stage);
+    emitScopeEnd(stage);
+    emitLine("else if (pt_sel < pt_pTrans + (1.0 - pt_pTrans) * (pt_pCoat_s + (1.0 - pt_pCoat_s) * pt_pSpec))", stage, false);
     emitScopeBegin(stage);
     emitLine("vec3 pt_Hl = SampleGGXVNDF(pt_Vl, pt_a, pt_a, pt_r1, pt_r2)", stage);
     emitLine("if (pt_Hl.z < 0.0) pt_Hl = -pt_Hl", stage);

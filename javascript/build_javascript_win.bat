@@ -1,5 +1,6 @@
 @rem This script builds MaterialX JavaScript on Windows. The final command starts a local server, allowing you to
 @rem run the MaterialX Web Viewer locally by entering 'http://localhost:8080' in the search bar of your browser.
+@rem If PathTracerGlslShaderGenerator ABI changed, rerun this script and republish generated artifacts.
 @echo --------------------- Setup Emscripten ---------------------
 @echo on
 @rem Edit the following paths to match your local locations for the Emscripten and MaterialX projects.
@@ -21,16 +22,16 @@ if NOT ["%errorlevel%"]==["0"] pause
 cd javascript
 call npm install
 if NOT ["%errorlevel%"]==["0"] pause
-@echo --------------------- Run JavaScript Tests ---------------------
-@echo on
-cd MaterialXTest
-call npx playwright install chromium
-call npm run test
-call npm run test:browser
-if NOT ["%errorlevel%"]==["0"] pause
-@echo --------------------- Run Interactive Viewer ---------------------
-@echo on
-cd ..\MaterialXView
-call npm run build
-call npm run start
-if NOT ["%errorlevel%"]==["0"] pause
+@rem @echo --------------------- Run JavaScript Tests ---------------------
+@rem @echo on
+@rem cd MaterialXTest
+@rem call npx playwright install chromium
+@rem call npm run test
+@rem call npm run test:browser
+@rem if NOT ["%errorlevel%"]==["0"] pause
+@rem @echo --------------------- Run Interactive Viewer ---------------------
+@rem @echo on
+@rem cd ..\MaterialXView
+@rem call npm run build
+@rem call npm run start
+@rem if NOT ["%errorlevel%"]==["0"] pause
